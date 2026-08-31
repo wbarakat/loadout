@@ -20,6 +20,9 @@ commands:
   device                     show this device's name and age recipient
   remote                     show the configured remote and last synced version
   remote add URL TOKEN       configure the remote to sync with
+  join URL TOKEN             enroll this device with a remote, waiting for approval
+  devices [--json]           show every device: approved or waiting
+  devices approve NAME       approve a waiting device
   sync [--dry-run] [--remote] project the vault into every enabled tool, and sync
   status                     show the vault and the adapter state
   doctor                     find problems and show the fix for each one
@@ -89,6 +92,10 @@ func Run(out, errOut io.Writer, args []string) int {
 		return cmdDevice(out, errOut, m)
 	case "remote":
 		return cmdRemote(out, errOut, args[1:], m)
+	case "join":
+		return cmdJoin(out, errOut, args[1:], m)
+	case "devices":
+		return cmdDevices(out, errOut, args[1:], m)
 	case "sync":
 		return cmdSync(out, errOut, args[1:], m)
 	case "status":
