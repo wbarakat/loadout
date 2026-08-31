@@ -16,6 +16,7 @@ func cmdDoctor(out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+	printWarnings(errOut, v)
 	count := 0
 	if _, err := os.Stat(filepath.Join(v.Root, ".git")); err != nil {
 		count++

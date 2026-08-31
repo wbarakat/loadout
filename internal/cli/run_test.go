@@ -249,6 +249,59 @@ func TestDoctorReportsEmbeddedGitRepo(t *testing.T) {
 	}
 }
 
+// appendManifestKey adds a raw TOML line to the vault's manifest, so
+// tests can plant an unknown key for the warning path.
+func appendManifestKey(t *testing.T, base, line string) {
+	t.Helper()
+	path := filepath.Join(base, "vault", "loadout.toml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, []byte(line)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncPrintsManifestWarnings(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	appendManifestKey(t, base, "enable = true\n")
+
+	_, errOut, code := run(t, "sync")
+	if code != 0 {
+		t.Fatalf("sync failed: %s", errOut)
+	}
+	if !strings.Contains(errOut, "unknown") {
+		t.Fatalf("sync must print the manifest warning, got %q", errOut)
+	}
+}
+
+func TestStatusPrintsManifestWarnings(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	appendManifestKey(t, base, "enable = true\n")
+
+	_, errOut, code := run(t, "status")
+	if code != 0 {
+		t.Fatalf("status failed: %s", errOut)
+	}
+	if !strings.Contains(errOut, "unknown") {
+		t.Fatalf("status must print the manifest warning, got %q", errOut)
+	}
+}
+
+func TestDoctorPrintsManifestWarnings(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	appendManifestKey(t, base, "enable = true\n")
+
+	_, errOut, _ := run(t, "doctor")
+	if !strings.Contains(errOut, "unknown") {
+		t.Fatalf("doctor must print the manifest warning, got %q", errOut)
+	}
+}
+
 func TestDoctorReportsMissingHistory(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")

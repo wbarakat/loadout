@@ -2,6 +2,7 @@ package vault_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,6 +83,132 @@ func TestOpenRecreatesStructuralDirs(t *testing.T) {
 	}
 	if fi, err := os.Stat(v2.MemoryDir()); err != nil || !fi.IsDir() {
 		t.Fatal("Open must recreate a missing structural directory")
+	}
+}
+
+func TestInitWritesGitignore(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "vault")
+	v, err := vault.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(v.Root, ".gitignore"))
+	if err != nil {
+		t.Fatal("Init must write a .gitignore file")
+	}
+	for _, entry := range []string{".DS_Store", "render/", "loadout.lock"} {
+		if !strings.Contains(string(data), entry) {
+			t.Fatalf(".gitignore missing %q, got %q", entry, string(data))
+		}
+	}
+}
+
+func TestInitSkipsRenderGitkeep(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "vault")
+	v, err := vault.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(v.RenderDir(), ".gitkeep")); err == nil {
+		t.Fatal("Init must not write render/.gitkeep; render is derived state")
+	}
+	for _, d := range []string{v.SkillsDir(), v.MemoryDir()} {
+		if _, err := os.Stat(filepath.Join(d, ".gitkeep")); err != nil {
+			t.Fatalf("missing .gitkeep in %s", d)
+		}
+	}
+}
+
+func TestOpenHealsMissingGitignore(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "vault")
+	v, err := vault.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(v.Root, ".gitignore")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.Open(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".gitignore")); err != nil {
+		t.Fatal("Open must heal a missing .gitignore file")
+	}
+}
+
+func TestOpenStoresManifestWarnings(t *testing.T) {
+	root := t.TempDir()
+	toml := "version = 1\nenable = true\n\n[adapters.claude-code]\nenabled = true\n"
+	if err := os.WriteFile(filepath.Join(root, "loadout.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "the manifest key enable is unknown; loadout ignores it."
+	if len(v.Warnings) != 1 || v.Warnings[0] != want {
+		t.Fatalf("Warnings = %v, want [%q]", v.Warnings, want)
+	}
+}
+
+func TestOpenRejectsFutureManifestVersion(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "loadout.toml"), []byte("version = 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := vault.Open(root)
+	want := "the vault manifest is version 2; this loadout build understands version 1. Fix: upgrade loadout."
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+}
+
+// TestGitignoreCoexistsWithTrackedRenderGitkeep guards the Task 3
+// migration note: a vault made before this change may already have
+// render/.gitkeep committed to history. The new .gitignore rule must
+// not fight that; git leaves an already-tracked file tracked even
+// once a rule ignores its directory, and Snapshot must not error.
+func TestGitignoreCoexistsWithTrackedRenderGitkeep(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "vault")
+	for _, d := range []string{"skills", "memory", "render"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "render", ".gitkeep"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "loadout.toml"), []byte("version = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v: %s", args, err, out)
+		}
+	}
+	runGit("init", "-q", "-b", "main")
+	runGit("add", "-A")
+	runGit("-c", "user.name=x", "-c", "user.email=x@x", "commit", "-q", "-m", "legacy vault")
+
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".gitignore")); err != nil {
+		t.Fatal("Open must heal the missing .gitignore")
+	}
+	if err := vault.Snapshot(v, "sync"); err != nil {
+		t.Fatalf("Snapshot must not fail alongside an already-tracked render/.gitkeep: %v", err)
+	}
+	out, err := exec.Command("git", "-C", root, "ls-files").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "render/.gitkeep") {
+		t.Fatal("an already-tracked render/.gitkeep must stay tracked")
 	}
 }
 

@@ -12,6 +12,9 @@ import (
 type Vault struct {
 	Root     string
 	Manifest Manifest
+	// Warnings lists non-fatal problems LoadManifest found while
+	// opening the vault, one entry per unknown manifest key.
+	Warnings []string
 }
 
 // DefaultRoot returns $LOADOUT_HOME, or ~/.loadout.
@@ -23,10 +26,35 @@ func DefaultRoot() string {
 }
 
 // structuralDirs lists the vault's fixed directories. Init creates
-// them with a .gitkeep file, so git tracks the structure even when
-// they hold no content yet; Open recreates any that went missing.
+// them; Open recreates any that went missing, so a stray "rm -rf"
+// does not wedge the vault.
 func structuralDirs(root string) []string {
 	return []string{filepath.Join(root, "skills"), filepath.Join(root, "memory"), filepath.Join(root, "render")}
+}
+
+// gitkeepDirs lists the structural directories that get a .gitkeep
+// file, so git tracks them while they hold no content yet. render/
+// is not among them: it holds only derived output, and the vault
+// .gitignore excludes the whole directory.
+func gitkeepDirs(root string) []string {
+	return []string{filepath.Join(root, "skills"), filepath.Join(root, "memory")}
+}
+
+// gitignoreContent lists the vault paths git must never track: OS
+// litter, the derived render output, and the lock file Lock creates.
+const gitignoreContent = ".DS_Store\nrender/\nloadout.lock\n"
+
+// writeGitignoreIfMissing writes root/.gitignore when no such file
+// exists yet. Init calls it when it creates a vault; Open calls it
+// too, so a vault made before this file existed heals itself.
+func writeGitignoreIfMissing(root string) error {
+	path := filepath.Join(root, ".gitignore")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.WriteFile(path, []byte(gitignoreContent), 0o644)
 }
 
 func Init(root string) (*Vault, error) {
@@ -45,9 +73,14 @@ func Init(root string) (*Vault, error) {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, err
 		}
+	}
+	for _, d := range gitkeepDirs(root) {
 		if err := os.WriteFile(filepath.Join(d, ".gitkeep"), nil, 0o644); err != nil {
 			return nil, err
 		}
+	}
+	if err := writeGitignoreIfMissing(root); err != nil {
+		return nil, err
 	}
 	m := DefaultManifest()
 	manifestPath := filepath.Join(root, "loadout.toml")
@@ -68,10 +101,14 @@ func Open(root string) (*Vault, error) {
 	if absErr != nil {
 		return nil, absErr
 	}
-	m, err := LoadManifest(filepath.Join(root, "loadout.toml"))
+	m, warnings, err := LoadManifest(filepath.Join(root, "loadout.toml"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("no vault at %s: run \"loadout init\" first", root)
+		}
+		var ve *versionError
+		if errors.As(err, &ve) {
+			return nil, err
 		}
 		return nil, fmt.Errorf("the manifest at %s is unreadable: %v", root, err)
 	}
@@ -85,7 +122,10 @@ func Open(root string) (*Vault, error) {
 			return nil, err
 		}
 	}
-	return &Vault{Root: root, Manifest: m}, nil
+	if err := writeGitignoreIfMissing(root); err != nil {
+		return nil, err
+	}
+	return &Vault{Root: root, Manifest: m, Warnings: warnings}, nil
 }
 
 // validateManifestPaths checks that every path an adapter writes to

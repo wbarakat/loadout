@@ -80,7 +80,10 @@ func TestLockAddsGitignoreEntry(t *testing.T) {
 }
 
 func TestLockNoGitignoreNoOp(t *testing.T) {
-	v := newVault(t)
+	// A bare vault, not run through Init, so no .gitignore exists yet.
+	// This isolates Lock's own behavior from Task 3's Init/Open
+	// healing, which is covered in vault_test.go.
+	v := &vault.Vault{Root: t.TempDir()}
 	release, err := vault.Lock(v)
 	if err != nil {
 		t.Fatal(err)

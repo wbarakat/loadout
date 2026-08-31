@@ -15,6 +15,7 @@ func cmdSync(out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+	printWarnings(errOut, v)
 	release, err := vault.Lock(v)
 	if err != nil {
 		fmt.Fprintln(errOut, err)

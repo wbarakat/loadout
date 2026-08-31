@@ -14,6 +14,7 @@ func cmdStatus(out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+	printWarnings(errOut, v)
 	skills, err := vault.ListSkills(v)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
