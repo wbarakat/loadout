@@ -1,7 +1,6 @@
 # Loadout — Product Plan
 
-Status: draft for review. Date: 2026-08-30.
-"Loadout" is a working name. See the open questions.
+Status: draft v2. The core decisions are set (section 12). Date: 2026-08-30.
 
 ## 1. Vision
 
@@ -34,7 +33,7 @@ No product unifies the three with a sync engine and Linear-grade polish. That is
 - **Skill**: a folder with a `SKILL.md` file plus resources. This matches the open agent-skills format.
 - **Secret**: a named, encrypted value with metadata (service, scopes, notes). The plain value never enters the vault files.
 - **Memory**: small markdown facts with frontmatter (type, description, links). This matches the flat-file memory pattern.
-- **Adapter**: a projection of the vault into one tool's expected layout. Example: symlink skills into `~/.claude/skills`, render memory into `MEMORY.md`, inject secrets as env vars.
+- **Adapter**: a projection of the vault into one tool's expected layout. Example: symlink skills into `~/.claude/skills`, render memory into `MEMORY.md`, inject secrets as env vars. Adapters come in two classes. A **file adapter** serves local tools: Claude Code, Codex CLI, Cursor, hermes, pi, and Gemini CLI. A **connector** serves hosted agents such as Devin, and syncs over the agent's API.
 - **Device**: an enrolled machine with its own key. Devices sync through the cloud.
 
 ## 5. Approach options
@@ -100,19 +99,25 @@ Components, each with one purpose:
 
 Each phase ships a complete, usable product. Do not start a phase before the prior phase works perfectly.
 
-**Phase 1 — Local vault + adapters (no cloud).**
-Build the CLI, the vault format, and two adapters: Claude Code and pi. Include a generic `AGENTS.md` adapter. Success: one edit in the vault appears in both tools. Dogfood on this Mac.
+**Phase 1 — Local vault + first adapters (no cloud).**
+Build the CLI, the vault format, and an adapter kit. Ship three adapters: Claude Code, pi, and a generic `AGENTS.md` adapter. Success: one edit in the vault appears in both tools. Dogfood on this Mac.
 
-**Phase 2 — Cloud sync.**
+**Phase 2 — Adapter coverage.**
+Cover the major local agents: Codex CLI, Cursor, hermes, and Gemini CLI. The adapter kit must make a new adapter cost under one day. Success: every local agent on the machine reads the same vault.
+
+**Phase 3 — Cloud sync.**
 Build accounts, device keys, encrypted snapshots, and the sync agent. Success: a change on the Mac appears on the Pi within seconds. No plaintext ever leaves a device.
 
-**Phase 3 — Secrets done right.**
+**Phase 4 — Secrets done right.**
 Add the encrypted secret store, env injection, access logs, and rotation reminders. Success: remove all plaintext keys from disk and from repo configs.
 
-**Phase 4 — MCP endpoint.**
+**Phase 5 — MCP endpoint.**
 Serve memory recall and brokered secret use over MCP. Success: an agent recalls a fact and calls an API without ever holding the key.
 
-**Phase 5 — Dashboard.**
+**Phase 6 — Connectors for hosted agents.**
+Push skills, instructions, and memory to hosted agents such as Devin over their APIs. Success: a vault edit reaches a hosted agent with no manual step.
+
+**Phase 7 — Dashboard.**
 Build the Linear-grade web app with in-browser decryption. Success: full browse, edit, and audit from the browser.
 
 Out of scope for v1: teams, sharing, a public skill marketplace, mobile apps, billing. Add them only after v1 is perfect for one person.
@@ -131,16 +136,16 @@ Out of scope for v1: teams, sharing, a public skill marketplace, mobile apps, bi
 - The server never holds a plaintext byte of user content.
 - The user deletes their manual symlink scripts and copy-paste habits.
 
-## 11. Assumptions (made without you; correct me)
+## 11. Assumptions
 
-1. You build this as a real product, not a personal script. The Linear/Resend framing implies that.
-2. The first users are you and your own setup: Claude Code, pi, the Mac, and the Raspberry Pi.
-3. v1 is single-user. Teams come later.
-4. File-based delivery is the right compatibility bet for 2026 agent tools.
+1. The first users are you and your own setup: Claude Code, pi, the Mac, and the Raspberry Pi.
+2. v1 is single-user. Teams come later.
+3. File-based delivery is the right compatibility bet for 2026 agent tools.
 
-## 12. Open questions
+## 12. Decisions
 
-1. The name. "Loadout" is a placeholder. Other candidates: Satchel, Kitbag.
-2. Product or personal tool first? The phases work for both, but the cloud service only pays off as a product.
-3. Which third adapter matters most after Claude Code and pi? Codex, Cursor, or the generic `AGENTS.md` path?
-4. Should memory sync include session transcripts, or curated facts only? The plan assumes curated facts only.
+1. **Name**: Loadout.
+2. **Positioning**: a public product from day one. Dogfood it on your own setup.
+3. **Source model**: open source the CLI, the vault format, and the adapters. Charge for the hosted sync service.
+4. **Memory scope**: curated facts only in v1. No transcripts.
+5. **Agent coverage**: all major agents. File adapters for Claude Code, Codex CLI, Cursor, hermes, pi, and Gemini CLI. Connectors for hosted agents such as Devin.
