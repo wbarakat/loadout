@@ -24,15 +24,18 @@ func (a ClaudeCode) Apply(v *vault.Vault) error {
 	if err != nil {
 		return err
 	}
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		return err
+	}
+	if err := scanForMarks(facts, skills); err != nil {
+		return err
+	}
 	renderPath := filepath.Join(v.RenderDir(), "memory.md")
 	if err := writeFileAtomic(renderPath, []byte(vault.RenderMemory(facts))); err != nil {
 		return err
 	}
 	if err := WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), a.memoryImport(v)); err != nil {
-		return err
-	}
-	skills, err := vault.ListSkills(v)
-	if err != nil {
 		return err
 	}
 	skillsDir := vault.ExpandPath(a.Cfg.SkillsDir)

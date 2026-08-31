@@ -12,14 +12,30 @@ import (
 
 // canonicalPath resolves the symlinks in path, so two different
 // spellings of the same location compare equal — for example /tmp
-// and /private/tmp on macOS. If path does not exist yet (a dangling
-// link target), it falls back to a cleaned version of the raw value.
+// and /private/tmp on macOS. If path does not exist (a dangling link
+// target), it walks up to the deepest existing ancestor, resolves
+// that, and rejoins the missing remainder — so a dangling target
+// under a symlink-indirected directory still canonicalizes. If no
+// ancestor resolves, it falls back to a cleaned version of the raw
+// value.
 func canonicalPath(path string) string {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return filepath.Clean(path)
+	clean := filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		return resolved
 	}
-	return resolved
+	dir := filepath.Dir(clean)
+	remainder := filepath.Base(clean)
+	for {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, remainder)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return clean
+		}
+		remainder = filepath.Join(filepath.Base(dir), remainder)
+		dir = parent
+	}
 }
 
 // isVaultOwned reports whether target is the vault skills directory,

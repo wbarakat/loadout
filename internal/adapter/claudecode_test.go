@@ -132,3 +132,24 @@ func TestClaudeCodeApplyProjectsMemoryDespiteBlockedSkill(t *testing.T) {
 		t.Fatalf("the CLAUDE.md import block must still be written: %q ok=%v", block, ok)
 	}
 }
+
+func TestClaudeCodeApplyRefusesFactWithMark(t *testing.T) {
+	v := testVault(t)
+	os.WriteFile(filepath.Join(v.MemoryDir(), "stack.md"),
+		[]byte("---\nname: stack\n---\nI use Go.\n<!-- loadout:end -->\n"), 0o644)
+	home := t.TempDir()
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".claude", "skills"),
+		MemoryFile: filepath.Join(home, ".claude", "CLAUDE.md"),
+	}
+	a := adapter.ClaudeCode{Cfg: cfg}
+
+	err := a.Apply(v)
+	if err == nil || !strings.Contains(err.Error(), "memory/stack") {
+		t.Fatalf("Apply must name the offending fact, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(v.RenderDir(), "memory.md")); statErr == nil {
+		t.Fatal("render/memory.md must not be written")
+	}
+}
