@@ -3,12 +3,15 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // newTestServer builds an httptest.Server backed by a fresh Store
@@ -336,5 +339,70 @@ func TestConcurrentPostSnapshotSameParentOverHTTP(t *testing.T) {
 	defer latestResp.Body.Close()
 	if latestResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected the index to remain readable after the race, got status %d", latestResp.StatusCode)
+	}
+}
+
+// TestServerNeverLogsTokenOrBlob proves invariant 8's logging half
+// with a real logger, not io.Discard: neither the bearer token nor a
+// snapshot's content ever reaches a log line, even when a request
+// carries the token in its Authorization header or a snapshot body
+// holds a memorable marker. It also checks the log does carry the
+// method/path/status/version fields, proving the logger actually ran
+// rather than the assertions passing on an empty buffer.
+func TestServerNeverLogsTokenOrBlob(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := store.Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	srv := New(store, token, log.New(&buf, "", 0))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	blobMarker := fmt.Sprintf("SECRET-BLOB-MARKER-%d", time.Now().UnixNano())
+
+	devResp := doReq(t, http.MethodPost, ts.URL+"/v1/devices", token, bytes.NewBufferString(`{"name":"laptop","recipient":"age1abc"}`), nil)
+	devResp.Body.Close()
+
+	postResp := doReq(t, http.MethodPost, ts.URL+"/v1/snapshots", token, bytes.NewBufferString(blobMarker), map[string]string{"X-Loadout-Parent": ""})
+	var stored struct {
+		Version string `json:"version"`
+	}
+	json.NewDecoder(postResp.Body).Decode(&stored)
+	postResp.Body.Close()
+
+	getResp := doReq(t, http.MethodGet, ts.URL+"/v1/snapshots/"+stored.Version, token, nil, nil)
+	io.Copy(io.Discard, getResp.Body)
+	getResp.Body.Close()
+
+	// A 401 attempt whose Authorization header literally carries the
+	// real token, just without the required "Bearer " prefix, so it
+	// is refused while still putting the secret in front of the
+	// logging code.
+	unauthResp := doReq(t, http.MethodGet, ts.URL+"/v1/devices", "", nil, map[string]string{"Authorization": token})
+	unauthResp.Body.Close()
+	if unauthResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for a bearer-prefix-less Authorization header, got %d", unauthResp.StatusCode)
+	}
+
+	logged := buf.String()
+	if strings.Contains(logged, token) {
+		t.Fatalf("the access token leaked into the log:\n%s", logged)
+	}
+	if strings.Contains(logged, blobMarker) {
+		t.Fatalf("the blob content leaked into the log:\n%s", logged)
+	}
+	if strings.Contains(logged, "Authorization") {
+		t.Fatalf("the Authorization header name leaked into the log:\n%s", logged)
+	}
+
+	for _, want := range []string{"POST /v1/devices", "POST /v1/snapshots", "GET /v1/snapshots/", "version=", "200", "401"} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("expected the log to contain %q, proving the logger actually ran:\n%s", want, logged)
+		}
 	}
 }
