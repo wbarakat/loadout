@@ -96,7 +96,7 @@ func TestInitWritesGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatal("Init must write a .gitignore file")
 	}
-	for _, entry := range []string{".DS_Store", "render/", "loadout.lock", "device.key", "device.name", "remote.toml", ".sync-state.json"} {
+	for _, entry := range []string{".DS_Store", "render/", "loadout.lock", "loadout.toml", "device.key", "device.name", "remote.toml", ".sync-state.json"} {
 		if !strings.Contains(string(data), entry) {
 			t.Fatalf(".gitignore missing %q, got %q", entry, string(data))
 		}
@@ -123,7 +123,7 @@ func TestOpenHealsMissingGitignoreLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range []string{".DS_Store", "render/", "loadout.lock", "device.key", "device.name", "remote.toml", ".sync-state.json"} {
+	for _, entry := range []string{".DS_Store", "render/", "loadout.lock", "loadout.toml", "device.key", "device.name", "remote.toml", ".sync-state.json"} {
 		if !strings.Contains(string(data), entry) {
 			t.Fatalf("healed .gitignore missing %q, got %q", entry, string(data))
 		}

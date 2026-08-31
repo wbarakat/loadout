@@ -42,10 +42,23 @@ func gitkeepDirs(root string) []string {
 
 // gitignoreContent lists the vault paths git must never track: OS
 // litter, the derived render output, the lock file Lock creates, the
-// device identity, and the sync configuration and state Phase 4
-// adds. remote.toml and .sync-state.json arrive in later tasks;
-// ignoring them now is safe and saves a second edit here.
-const gitignoreContent = ".DS_Store\nrender/\nloadout.lock\ndevice.key\ndevice.name\nremote.toml\n.sync-state.json\n"
+// device manifest, the device identity, and the sync configuration
+// and state Phase 4 adds. Decision 13 (spec v3.1 §16) keeps the
+// manifest, the device key, the device name, and the remote
+// configuration device-local; only skills, memory, and the device
+// roster sync. remote.toml and .sync-state.json arrive in later
+// tasks; ignoring them now is safe and saves a second edit here.
+const gitignoreContent = ".DS_Store\nrender/\nloadout.lock\nloadout.toml\ndevice.key\ndevice.name\nremote.toml\n.sync-state.json\n"
+
+// SyncedSet lists the vault paths that sync between devices: skills,
+// memory, and the device roster. Everything else in the vault —
+// the manifest, the device key, the device name, and the remote
+// configuration — is device-local and never syncs. Decision 13
+// (spec v3.1 §16) fixes this split; later sync tasks read this list
+// rather than repeating it.
+func SyncedSet() []string {
+	return []string{"skills", "memory", "devices.toml"}
+}
 
 // writeGitignoreIfMissing writes root/.gitignore when no such file
 // exists yet, and adds any gitignoreContent line missing from an
@@ -150,7 +163,29 @@ func Open(root string) (*Vault, error) {
 	if err := writeGitignoreIfMissing(root); err != nil {
 		return nil, err
 	}
-	return &Vault{Root: root, Manifest: m, Warnings: warnings}, nil
+	v := &Vault{Root: root, Manifest: m, Warnings: warnings}
+	healTrackedManifest(v)
+	return v, nil
+}
+
+// healTrackedManifest untracks loadout.toml when a pre-Phase 4 vault
+// still has it committed to history: Decision 13 (spec v3.1 §16)
+// keeps the manifest device-local, so history must not carry it
+// forward. It runs quietly and changes nothing on a healthy vault,
+// where the file is already untracked, so after the first heal every
+// later Open finds it so and does nothing. It also does nothing on a
+// vault whose history is missing, leaving that vault's own error path
+// (noHistoryErr, raised later by log, context, and undo) intact
+// instead of failing here on the tracking probe.
+func healTrackedManifest(v *Vault) {
+	out, err := git(v, "ls-files", "loadout.toml")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return
+	}
+	if _, err := git(v, "rm", "--cached", "--quiet", "loadout.toml"); err != nil {
+		return
+	}
+	_ = Snapshot(v, "split the manifest")
 }
 
 // validateManifestPaths checks that every path an adapter writes to
