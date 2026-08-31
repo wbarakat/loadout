@@ -91,6 +91,11 @@ func writeRoster(v *Vault, roster map[string]string) error {
 		os.Remove(tmp)
 		return err
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
 		return err
@@ -114,10 +119,23 @@ func headHash(v *Vault) (string, error) {
 // content is pinned to. It encrypts to every recipient listed in
 // devices.toml, or to this device alone when that file is absent or
 // lists no one.
+//
+// It refuses to pack while any synced path holds a change HEAD does
+// not know about yet: the tar it builds reads the working tree, not
+// the commit, so an unsnapshotted edit would make headHashOut name a
+// commit that does not match the bytes the caller is about to send.
 func PackSnapshot(v *Vault) (blob []byte, headHashOut string, err error) {
 	headHashOut, err = headHash(v)
 	if err != nil {
 		return nil, "", err
+	}
+	statusArgs := append([]string{"status", "--porcelain", "--"}, SyncedSet()...)
+	status, err := git(v, statusArgs...)
+	if err != nil {
+		return nil, "", err
+	}
+	if strings.TrimSpace(status) != "" {
+		return nil, "", errors.New("the vault has unsnapshotted changes. Fix: run a loadout command that snapshots, then pack again.")
 	}
 	tarBytes, err := packTar(v)
 	if err != nil {
@@ -314,6 +332,39 @@ func safeSymlinkTarget(entryPath, dir, linkname string) error {
 	return nil
 }
 
+// hasSymlinkComponent reports whether any already-existing directory
+// component between dir and full — every step the entry's own write
+// passes through on its way to full, not full's own final name — is
+// a symlink. os.OpenFile, os.MkdirAll, and os.Symlink all follow an
+// intermediate symlink silently: an earlier entry can plant one (a
+// name that resolves safely on its own, since it points inside dir),
+// and a later entry named right through it then lands wherever that
+// symlink really points, bypassing every check that only looked at
+// the entry's own name and target. A component that does not exist
+// yet is not a risk: extraction is about to create it fresh.
+func hasSymlinkComponent(dir, full string) (bool, error) {
+	rel, err := filepath.Rel(dir, full)
+	if err != nil {
+		return false, err
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	current := dir
+	for _, part := range parts[:len(parts)-1] {
+		current = filepath.Join(current, part)
+		fi, err := os.Lstat(current)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return false, nil
+			}
+			return false, err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // UnpackSnapshot decrypts blob with this device's identity and
 // extracts its tar content into dir. It refuses any entry whose name
 // or, for a symlink, whose target would land outside dir; nothing
@@ -352,6 +403,11 @@ func UnpackSnapshot(v *Vault, blob []byte, dir string) error {
 func extractTarEntry(dir string, hdr *tar.Header, r io.Reader) error {
 	full, err := safeJoin(dir, hdr.Name)
 	if err != nil {
+		return unsafePathErr(hdr.Name)
+	}
+	if bad, err := hasSymlinkComponent(dir, full); err != nil {
+		return err
+	} else if bad {
 		return unsafePathErr(hdr.Name)
 	}
 	mode := os.FileMode(hdr.Mode).Perm()

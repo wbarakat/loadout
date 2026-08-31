@@ -13,7 +13,10 @@ import (
 
 // newSnapshotTestVault builds a fresh vault with a skill file and a
 // memory file, so packTar and PackSnapshot always have something to
-// carry.
+// carry. It ends with a Snapshot, so the vault's synced paths start
+// clean: PackSnapshot refuses to run over an unsnapshotted change, so
+// a test that wants one adds it after this call and snapshots (or
+// checks the refusal) itself.
 func newSnapshotTestVault(t *testing.T) *Vault {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "vault")
@@ -29,6 +32,9 @@ func newSnapshotTestVault(t *testing.T) *Vault {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(v.MemoryDir(), "fact.md"), []byte("a fact"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Snapshot(v, "add test content"); err != nil {
 		t.Fatal(err)
 	}
 	return v
@@ -170,6 +176,33 @@ func TestPackSnapshotOnNoHistoryVaultGivesFixedError(t *testing.T) {
 	}
 }
 
+// TestPackSnapshotRefusesUnsnapshottedChanges proves PackSnapshot
+// never packs the working tree while it disagrees with HEAD: the
+// headHash it would report must always name a commit that matches
+// the bytes it packs.
+func TestPackSnapshotRefusesUnsnapshottedChanges(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	if err := os.WriteFile(filepath.Join(v.MemoryDir(), "fact.md"), []byte("an edited fact"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := PackSnapshot(v)
+	if err == nil {
+		t.Fatal("PackSnapshot must refuse while a synced path holds an unsnapshotted change")
+	}
+	want := "the vault has unsnapshotted changes. Fix: run a loadout command that snapshots, then pack again."
+	if err.Error() != want {
+		t.Fatalf("bad error: got %q want %q", err.Error(), want)
+	}
+
+	if err := Snapshot(v, "edit a fact"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := PackSnapshot(v); err != nil {
+		t.Fatalf("PackSnapshot after a snapshot must succeed: %v", err)
+	}
+}
+
 // TestPackSnapshotEncryptsToEveryRosterRecipient proves a two-device
 // roster produces a snapshot the second device's own identity can
 // decrypt, never touching the first device's key.
@@ -187,6 +220,9 @@ func TestPackSnapshotEncryptsToEveryRosterRecipient(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := AddToRoster(v, "other-device", other.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := Snapshot(v, "add the device roster"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -212,6 +248,32 @@ func TestPackSnapshotEncryptsToEveryRosterRecipient(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the snapshot the second device decrypted must contain memory/fact.md")
+	}
+}
+
+// TestPackSnapshotRefusesMalformedRecipient proves a devices.toml
+// that parses fine as TOML but holds a bad recipient string gets the
+// same fixed roster grammar as a parse failure, and does not panic.
+func TestPackSnapshotRefusesMalformedRecipient(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	path := devicesTomlPath(v)
+	content := "[devices.bad]\nrecipient = \"not-a-valid-age-recipient\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Snapshot(v, "add a bad recipient"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := PackSnapshot(v)
+	if err == nil {
+		t.Fatal("PackSnapshot must refuse a malformed recipient in devices.toml")
+	}
+	if !strings.Contains(err.Error(), path+": the device roster cannot be read:") {
+		t.Fatalf("bad error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Fix: repair the file, or remove it to sync with this device only.") {
+		t.Fatalf("bad error: %v", err)
 	}
 }
 
@@ -356,6 +418,73 @@ func TestUnpackSnapshotRefusesEscapingSymlink(t *testing.T) {
 	}
 	if _, statErr := os.Lstat(filepath.Join(filepath.Dir(dir), "outside.txt")); statErr == nil {
 		t.Fatal("UnpackSnapshot must not write outside dir")
+	}
+}
+
+// TestUnpackSnapshotRefusesChainedSymlinkEscape reproduces the review
+// finding: entry "sub/a" -> "../z" is safe by itself (it resolves
+// inside dir), and entry "sub/a/inner" -> "../../outside" also looks
+// safe by pure lexical arithmetic on its own name. But "sub/a" is
+// really a symlink to dir/z, so the OS routes the second entry's
+// write through it, landing a new symlink at dir/z/inner instead —
+// and dir/z/inner's own two ".." hops escape dir for real. The
+// intermediate-component check must catch entry 4 before either
+// symlink is written for it.
+func TestUnpackSnapshotRefusesChainedSymlinkEscape(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	tarData := buildTar(t, func(tw *tar.Writer) {
+		tw.WriteHeader(&tar.Header{Name: "z/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "sub/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "sub/a", Typeflag: tar.TypeSymlink, Linkname: "../z", Mode: 0o777})
+		tw.WriteHeader(&tar.Header{Name: "sub/a/inner", Typeflag: tar.TypeSymlink, Linkname: "../../outside", Mode: 0o777})
+	})
+	blob := encryptForVault(t, v, tarData)
+
+	dir := t.TempDir()
+	err := UnpackSnapshot(v, blob, dir)
+	if err == nil {
+		t.Fatal("UnpackSnapshot must refuse the chained symlink escape, not return cleanly")
+	}
+	if !strings.Contains(err.Error(), "sub/a/inner") || !strings.Contains(err.Error(), "the snapshot holds an unsafe path") {
+		t.Fatalf("bad error: %v", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(dir, "z", "inner")); statErr == nil {
+		t.Fatal("UnpackSnapshot must not create anything at the real (symlink-resolved) location")
+	}
+	if _, statErr := os.Lstat(filepath.Join(dir, "sub", "a", "inner")); statErr == nil {
+		t.Fatal("UnpackSnapshot must not create anything at the lexical location either")
+	}
+	if _, statErr := os.Lstat(filepath.Join(filepath.Dir(dir), "outside")); statErr == nil {
+		t.Fatal("UnpackSnapshot must not write outside dir")
+	}
+}
+
+// TestUnpackSnapshotRefusesRegularFileThroughSymlinkComponent proves
+// the same intermediate-component check refuses a plain regular-file
+// entry, not only a symlink entry, when an earlier entry already
+// planted a symlink at one of its path components.
+func TestUnpackSnapshotRefusesRegularFileThroughSymlinkComponent(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	tarData := buildTar(t, func(tw *tar.Writer) {
+		body := []byte("pwned")
+		tw.WriteHeader(&tar.Header{Name: "z/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "sub/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "sub/a", Typeflag: tar.TypeSymlink, Linkname: "../z", Mode: 0o777})
+		tw.WriteHeader(&tar.Header{Name: "sub/a/inner", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))})
+		tw.Write(body)
+	})
+	blob := encryptForVault(t, v, tarData)
+
+	dir := t.TempDir()
+	err := UnpackSnapshot(v, blob, dir)
+	if err == nil {
+		t.Fatal("UnpackSnapshot must refuse a regular-file entry routed through a symlink component")
+	}
+	if !strings.Contains(err.Error(), "sub/a/inner") || !strings.Contains(err.Error(), "the snapshot holds an unsafe path") {
+		t.Fatalf("bad error: %v", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(dir, "z", "inner")); statErr == nil {
+		t.Fatal("UnpackSnapshot must not write the file at the real (symlink-resolved) location")
 	}
 }
 
