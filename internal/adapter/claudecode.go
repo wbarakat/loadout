@@ -24,8 +24,13 @@ func (a ClaudeCode) Apply(v *vault.Vault) error {
 	if err != nil {
 		return err
 	}
-	if _, err := LinkSkills(skills, vault.ExpandPath(a.Cfg.SkillsDir)); err != nil {
+	skillsDir := vault.ExpandPath(a.Cfg.SkillsDir)
+	blocked, err := LinkSkills(skills, v.SkillsDir(), skillsDir)
+	if err != nil {
 		return err
+	}
+	if len(blocked) > 0 {
+		return blockedSkillsError(blocked, skillsDir)
 	}
 	facts, err := vault.ListFacts(v)
 	if err != nil {
@@ -44,13 +49,7 @@ func (a ClaudeCode) Check(v *vault.Vault) []Problem {
 	if err != nil {
 		return []Problem{{a.Name(), err.Error(), "repair the vault skills directory"}}
 	}
-	dir := vault.ExpandPath(a.Cfg.SkillsDir)
-	for _, s := range skills {
-		cur, err := os.Readlink(filepath.Join(dir, s.Name))
-		if err != nil || cur != s.Dir {
-			ps = append(ps, Problem{a.Name(), "the skill " + s.Name + " is not linked", "run: loadout sync"})
-		}
-	}
+	ps = append(ps, checkLinks(a.Name(), skills, v.SkillsDir(), vault.ExpandPath(a.Cfg.SkillsDir))...)
 	got, ok := ReadManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile))
 	if !ok || got != a.memoryImport(v) {
 		ps = append(ps, Problem{a.Name(), "the memory import block is missing or stale", "run: loadout sync"})

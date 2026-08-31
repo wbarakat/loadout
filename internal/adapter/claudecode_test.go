@@ -70,3 +70,34 @@ func TestClaudeCodeApplyAndCheck(t *testing.T) {
 		t.Fatal("check must flag a stale rendered memory")
 	}
 }
+
+func TestClaudeCodeApplyReportsBlockedSkill(t *testing.T) {
+	v := testVault(t)
+	home := t.TempDir()
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".claude", "skills"),
+		MemoryFile: filepath.Join(home, ".claude", "CLAUDE.md"),
+	}
+	a := adapter.ClaudeCode{Cfg: cfg}
+	// A real directory occupies the skill's link path: it blocks the link.
+	blockedPath := filepath.Join(cfg.SkillsDir, "deploy-checks")
+	if err := os.MkdirAll(blockedPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := a.Apply(v)
+	if err == nil || !strings.Contains(err.Error(), blockedPath) {
+		t.Fatalf("Apply must name the blocked path, got %v", err)
+	}
+
+	found := false
+	for _, p := range a.Check(v) {
+		if strings.Contains(p.Detail, blockedPath) && strings.Contains(p.Fix, blockedPath) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Check must report the occupied path with a move-or-remove fix: %+v", a.Check(v))
+	}
+}
