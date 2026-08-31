@@ -20,7 +20,10 @@ func TestParseAddress(t *testing.T) {
 }
 
 func TestParseAddressRejectsBadInput(t *testing.T) {
-	for _, s := range []string{"deploy-checks", "widget/foo", "skill/", "/foo", ""} {
+	for _, s := range []string{
+		"deploy-checks", "widget/foo", "skill/", "/foo", "",
+		"memory/../x", "memory/foo/bar", "skill/.hidden", "memory/foo\\bar",
+	} {
 		_, _, err := vault.ParseAddress(s)
 		if err == nil {
 			t.Fatalf("%q must be rejected", s)
