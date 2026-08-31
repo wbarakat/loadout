@@ -16,10 +16,12 @@ const recentHistoryCount = 3
 const nextLine = "next: loadout show <kind/name> reads one item; loadout recall <terms> searches."
 
 // contextItem is one fact or skill entry in the JSON shape of
-// "loadout context".
+// "loadout context". Address is "<kind>/<name>", the same shape
+// "loadout list" and "loadout recall" use, so a caller can pass it
+// straight to "loadout show" or "loadout edit" without guessing kind.
 type contextItem struct {
-	Name string `json:"name"`
-	Hook string `json:"hook"`
+	Address string `json:"address"`
+	Hook    string `json:"hook"`
 }
 
 // contextResult is the JSON shape of "loadout context".
@@ -61,11 +63,11 @@ func cmdContext(out, errOut io.Writer, m mode) int {
 	if m == modeJSON {
 		memory := make([]contextItem, 0, len(facts))
 		for _, f := range facts {
-			memory = append(memory, contextItem{Name: f.Name, Hook: f.Description})
+			memory = append(memory, contextItem{Address: "memory/" + f.Name, Hook: f.Description})
 		}
 		skillsList := make([]contextItem, 0, len(skills))
 		for _, s := range skills {
-			skillsList = append(skillsList, contextItem{Name: s.Name, Hook: s.Description})
+			skillsList = append(skillsList, contextItem{Address: "skill/" + s.Name, Hook: s.Description})
 		}
 		recent := make([]string, 0, len(subjects))
 		recent = append(recent, subjects...)

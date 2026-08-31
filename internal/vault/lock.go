@@ -46,9 +46,10 @@ func Lock(v *Vault) (release func(), err error) {
 
 // ensureLockIgnored adds a loadout.lock entry to the vault's
 // .gitignore file, so the lock file never enters history. It does
-// nothing when no .gitignore file exists yet; Init creates that file
-// (see Task 3) and lists loadout.lock itself. It also does nothing
-// when the entry is already present.
+// nothing when no .gitignore file exists yet — Init and Open both
+// write one before Lock ever runs, and it already lists
+// loadout.lock — and nothing when the entry is already present. It
+// exists to heal a vault whose .gitignore predates the lock line.
 func ensureLockIgnored(root string) {
 	path := filepath.Join(root, ".gitignore")
 	data, err := os.ReadFile(path)

@@ -36,7 +36,7 @@ func renderAgentsMD(v *vault.Vault) (string, error) {
 }
 
 func (a AgentsMD) Apply(v *vault.Vault, dry bool) (Report, error) {
-	report := Report{Adapter: a.Name(), DryRun: dry}
+	report := newReport(a.Name(), dry)
 	facts, err := vault.ListFacts(v)
 	if err != nil {
 		return report, err

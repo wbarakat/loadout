@@ -40,7 +40,7 @@ func cmdShow(out, errOut io.Writer, args []string, m mode) int {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintln(errOut, err)
+		fmt.Fprintf(errOut, "%s/%s: the item file cannot be read: %v. Fix: check the file permissions.\n", kind, name, err)
 		return 1
 	}
 	if m == modeJSON {

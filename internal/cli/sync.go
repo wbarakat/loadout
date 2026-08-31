@@ -55,16 +55,18 @@ func cmdSync(out, errOut io.Writer, args []string, m mode) int {
 	for _, a := range adapter.Enabled(v) {
 		report, err := a.Apply(v, dry)
 		if err != nil {
+			report.Error = err.Error()
 			fmt.Fprintf(errOut, "%s: %v\n", a.Name(), err)
 			problem = true
+			reports = append(reports, report)
 			continue
 		}
 		reports = append(reports, report)
 		if m != modeJSON {
 			if dry {
-				fmt.Fprintf(out, "would sync %s (%d to link, %d to prune; memory: %s)\n", a.Name(), countSkillLinks(report.Applied), len(report.Pruned), memoryStatus(report.Applied))
+				fmt.Fprintf(out, "would sync %s (%d to link, %d to prune; memory: %s)\n", a.Name(), report.Linked, len(report.Pruned), memoryStatus(report.Applied))
 			} else {
-				fmt.Fprintf(out, "synced %s (%d linked, %d pruned)\n", a.Name(), countSkillLinks(report.Applied), len(report.Pruned))
+				fmt.Fprintf(out, "synced %s (%d linked, %d pruned)\n", a.Name(), report.Linked, len(report.Pruned))
 			}
 		}
 		for _, b := range report.Blocked {
@@ -89,19 +91,6 @@ func cmdSync(out, errOut io.Writer, args []string, m mode) int {
 		return 1
 	}
 	return 0
-}
-
-// countSkillLinks counts the entries in an applied list that name a
-// linked skill, not a memory write. Only these entries count as
-// "linked" (or, on a dry run, "to link") in the sync summary line.
-func countSkillLinks(applied []string) int {
-	n := 0
-	for _, a := range applied {
-		if strings.HasPrefix(a, "skill/") {
-			n++
-		}
-	}
-	return n
 }
 
 // memoryStatus finds the one applied entry that reports the memory

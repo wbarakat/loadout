@@ -571,6 +571,34 @@ func TestShowRejectsBadAddress(t *testing.T) {
 	}
 }
 
+// TestShowReportsUnreadableFileWithFixedMessage proves an unreadable
+// item file gets the standard error grammar, naming the address and
+// the fix, instead of a bare os.ReadFile error.
+func TestShowReportsUnreadableFileWithFixedMessage(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a file regardless of its permissions")
+	}
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "x")
+	path := filepath.Join(base, "vault", "memory", "x.md")
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(path, 0o644)
+
+	_, errOut, code := run(t, "show", "memory/x")
+	if code != 1 {
+		t.Fatalf("an unreadable item file must exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut, "memory/x: the item file cannot be read:") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+	if !strings.Contains(errOut, "Fix: check the file permissions.") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+}
+
 func TestListShowsSkillsAndFactsInOrder(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")
@@ -640,6 +668,27 @@ func TestEditRequiresAnAddress(t *testing.T) {
 	run(t, "init")
 	if _, errOut, code := run(t, "edit"); code != 2 || !strings.Contains(errOut, "usage") {
 		t.Fatalf("edit without an address must be a usage error, got %d %q", code, errOut)
+	}
+}
+
+// TestEditReportsEditorSpawnFailureWithFixedMessage proves a failing
+// editor gets the standard error grammar, naming the editor and the
+// fix, instead of a bare exec error.
+func TestEditReportsEditorSpawnFailureWithFixedMessage(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "x")
+	t.Setenv("EDITOR", "/no/such/editor-binary")
+
+	_, errOut, code := run(t, "edit", "memory/x")
+	if code != 1 {
+		t.Fatalf("a failing editor must exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut, "/no/such/editor-binary: the editor did not start:") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+	if !strings.Contains(errOut, "Fix: set $EDITOR to a working editor.") {
+		t.Fatalf("bad error: %q", errOut)
 	}
 }
 
@@ -956,6 +1005,26 @@ func TestReviewDropMissingAddressExitsOne(t *testing.T) {
 	want := "memory/nope: no such item. Fix: run loadout list.\n"
 	if errOut != want {
 		t.Fatalf("bad error: got %q want %q", errOut, want)
+	}
+}
+
+// TestReviewDropRejectsKeptItem proves review drop is guarded to
+// drafts: a human's kept item must not be destroyed by a drop.
+func TestReviewDropRejectsKeptItem(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "x") // default human, kept
+
+	_, errOut, code := run(t, "review", "drop", "memory/x")
+	if code != 1 {
+		t.Fatalf("dropping a kept item must exit 1, got %d", code)
+	}
+	want := "memory/x: not a draft. Fix: remove the item file directly, or run loadout review to see the drafts.\n"
+	if errOut != want {
+		t.Fatalf("bad error: got %q want %q", errOut, want)
+	}
+	if _, err := os.Stat(filepath.Join(base, "vault", "memory", "x.md")); err != nil {
+		t.Fatal("a rejected drop must leave the kept item on disk")
 	}
 }
 

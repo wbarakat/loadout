@@ -287,6 +287,60 @@ func TestSyncJSON(t *testing.T) {
 	}
 }
 
+// TestSyncJSONIncludesFailedAdapterReportWithError proves that a
+// failed adapter's report still lands in the JSON reports array,
+// carrying the error that stopped it, instead of vanishing.
+func TestSyncJSONIncludesFailedAdapterReportWithError(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	// A fact whose body holds a loadout mark makes every adapter's
+	// Apply fail at the same scanForMarks check.
+	factPath := filepath.Join(base, "vault", "memory", "bad.md")
+	content := "---\nname: bad\ndescription: x\ntype: user\n---\n\n<!-- loadout:begin -->\n"
+	if err := os.WriteFile(factPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := run(t, "sync", "--json")
+	if code != 1 {
+		t.Fatalf("sync must fail when an item holds a loadout mark, got %d (err=%q)", code, errOut)
+	}
+	var got struct {
+		Reports []struct {
+			Adapter string `json:"adapter"`
+			Error   string `json:"error"`
+		} `json:"reports"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("sync --json did not parse: %v\noutput: %s", err, out)
+	}
+	if len(got.Reports) == 0 {
+		t.Fatalf("a failed adapter's report must still appear in reports, got %+v", got)
+	}
+	for _, r := range got.Reports {
+		if r.Error == "" {
+			t.Fatalf("every report must carry its error, got %+v", r)
+		}
+	}
+}
+
+// TestSyncJSONReportArraysAreNeverNull proves applied, pruned, and
+// blocked always marshal as "[]", never as JSON null, even for an
+// adapter with nothing to report in one of them.
+func TestSyncJSONReportArraysAreNeverNull(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "my-stack")
+
+	out, errOut, code := run(t, "sync", "--json")
+	if code != 0 {
+		t.Fatalf("sync --json failed: %s", errOut)
+	}
+	if strings.Contains(out, "null") {
+		t.Fatalf("a report array must never be null, got %s", out)
+	}
+}
+
 func TestSyncDryRunJSON(t *testing.T) {
 	setupEnv(t)
 	run(t, "init")
@@ -376,11 +430,11 @@ func TestContextJSON(t *testing.T) {
 		Skills int    `json:"skills"`
 		Facts  int    `json:"facts"`
 		Memory []struct {
-			Name string `json:"name"`
-			Hook string `json:"hook"`
+			Address string `json:"address"`
+			Hook    string `json:"hook"`
 		} `json:"memory"`
 		SkillsList []struct {
-			Name string `json:"name"`
+			Address string `json:"address"`
 		} `json:"skills_list"`
 		Recent []string `json:"recent"`
 	}
@@ -390,10 +444,10 @@ func TestContextJSON(t *testing.T) {
 	if got.Skills != 1 || got.Facts != 1 {
 		t.Fatalf("bad counts: %+v", got)
 	}
-	if len(got.Memory) != 1 || got.Memory[0].Name != "my-stack" {
+	if len(got.Memory) != 1 || got.Memory[0].Address != "memory/my-stack" {
 		t.Fatalf("bad memory: %+v", got)
 	}
-	if len(got.SkillsList) != 1 || got.SkillsList[0].Name != "deploy-checks" {
+	if len(got.SkillsList) != 1 || got.SkillsList[0].Address != "skill/deploy-checks" {
 		t.Fatalf("bad skills_list: %+v", got)
 	}
 	if len(got.Recent) == 0 {

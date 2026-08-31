@@ -21,7 +21,7 @@ func (a ClaudeCode) memoryImport(v *vault.Vault) string {
 }
 
 func (a ClaudeCode) Apply(v *vault.Vault, dry bool) (Report, error) {
-	report := Report{Adapter: a.Name(), DryRun: dry}
+	report := newReport(a.Name(), dry)
 	facts, err := vault.ListFacts(v)
 	if err != nil {
 		return report, err
@@ -65,9 +65,10 @@ func (a ClaudeCode) Apply(v *vault.Vault, dry bool) (Report, error) {
 	if err != nil {
 		return report, err
 	}
+	report.Linked = len(applied)
 	report.Applied = append(report.Applied, applied...)
-	report.Pruned = pruned
-	report.Blocked = blocked
+	report.Pruned = orEmpty(pruned)
+	report.Blocked = orEmpty(blocked)
 	return report, nil
 }
 

@@ -188,6 +188,15 @@ func cmdReviewDrop(out, errOut io.Writer, args []string, m mode) int {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+	draft, err := itemIsDraft(v, kind, name)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	if !draft {
+		fmt.Fprintf(errOut, "%s: not a draft. Fix: remove the item file directly, or run loadout review to see the drafts.\n", addr)
+		return 1
+	}
 	release, err := vault.Lock(v)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
@@ -209,4 +218,34 @@ func cmdReviewDrop(out, errOut io.Writer, args []string, m mode) int {
 	fmt.Fprintf(out, "dropped %s\n", addr)
 	fmt.Fprintln(out, "next: run loadout sync")
 	return 0
+}
+
+// itemIsDraft reports whether the item named kind/name currently
+// holds review: draft. cmdReviewDrop calls this before it deletes
+// anything, so a human's kept item can never be destroyed by a
+// mistaken or malicious drop.
+func itemIsDraft(v *vault.Vault, kind, name string) (bool, error) {
+	switch kind {
+	case "skill":
+		skills, err := vault.ListSkills(v)
+		if err != nil {
+			return false, err
+		}
+		for _, s := range skills {
+			if s.Name == name {
+				return s.Review == "draft", nil
+			}
+		}
+	case "memory":
+		facts, err := vault.ListFacts(v)
+		if err != nil {
+			return false, err
+		}
+		for _, f := range facts {
+			if f.Name == name {
+				return f.Review == "draft", nil
+			}
+		}
+	}
+	return false, nil
 }

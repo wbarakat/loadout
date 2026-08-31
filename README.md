@@ -57,19 +57,21 @@ itself.
 Add `--json` to any verb. Loadout then prints one JSON object to
 stdout instead of text, with a stable schema and a deterministic
 field order. Nothing else changes: exit codes stay the same, and
-warnings still print to stderr as text. The one exception is `edit`:
-it opens an interactive editor, so it has no JSON output. Pass `--json`
-to `edit` and Loadout exits 2 with a fixed error instead of opening
-anything.
+warnings still print to stderr as text. Two verbs are exceptions.
+`edit` opens an interactive editor, so it has no JSON output: pass
+`--json` to `edit` and Loadout exits 2 with a fixed error instead of
+opening anything. `help` always prints the usage text as plain text,
+even with `--json`, since the usage text has no JSON shape to hold.
 
 ### `--dry-run`
 
 Add `--dry-run` to `sync`. Loadout then walks every adapter and reports
 the full projection plan — what it would link, prune, or block — and
 writes nothing to disk. Use it to check the vault's state before you
-commit to a real sync. `sync --dry-run` never takes the vault lock and
-never fails on a blocked path; it only fails when a projected file is
-damaged in a way sync itself could not fix.
+commit to a real sync. A dry run takes the same vault lock as a real
+sync, so the two never race each other; it only fails when a projected
+file is damaged in a way sync itself could not fix, and never fails on
+a blocked path.
 
 ### `--by`
 

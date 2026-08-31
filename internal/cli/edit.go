@@ -53,7 +53,7 @@ func cmdEdit(out, errOut io.Writer, args []string, m mode) int {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintln(errOut, err)
+		fmt.Fprintf(errOut, "%s: the editor did not start: %v. Fix: set $EDITOR to a working editor.\n", editor, err)
 		return 1
 	}
 	fmt.Fprintln(out, "next: run loadout sync")
