@@ -55,5 +55,14 @@ func (a ClaudeCode) Check(v *vault.Vault) []Problem {
 	if !ok || got != a.memoryImport(v) {
 		ps = append(ps, Problem{a.Name(), "the memory import block is missing or stale", "run: loadout sync"})
 	}
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		return append(ps, Problem{a.Name(), err.Error(), "repair the vault memory directory"})
+	}
+	renderPath := filepath.Join(v.RenderDir(), "memory.md")
+	data, err := os.ReadFile(renderPath)
+	if err != nil || string(data) != vault.RenderMemory(facts) {
+		ps = append(ps, Problem{a.Name(), "the rendered memory is missing or stale", "run: loadout sync"})
+	}
 	return ps
 }

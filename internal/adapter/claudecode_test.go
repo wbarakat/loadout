@@ -63,4 +63,10 @@ func TestClaudeCodeApplyAndCheck(t *testing.T) {
 	if ps := a.Check(v); len(ps) != 0 {
 		t.Fatalf("check must be clean after apply: %+v", ps)
 	}
+	// Drift: change a fact; check must flag the stale rendered memory.
+	os.WriteFile(filepath.Join(v.MemoryDir(), "stack.md"),
+		[]byte("---\nname: stack\n---\nI use Rust now.\n"), 0o644)
+	if ps := a.Check(v); len(ps) == 0 {
+		t.Fatal("check must flag a stale rendered memory")
+	}
 }
