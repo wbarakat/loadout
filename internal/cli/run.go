@@ -68,7 +68,7 @@ func Run(out, errOut io.Writer, args []string) int {
 	case "context":
 		return cmdContext(out, errOut, m)
 	case "sync":
-		return cmdSync(out, errOut, m)
+		return cmdSync(out, errOut, args[1:], m)
 	case "status":
 		return cmdStatus(out, errOut, m)
 	case "doctor":

@@ -34,6 +34,39 @@ func TestAgentsMDApply(t *testing.T) {
 	}
 }
 
+func TestAgentsMDApplyDryRunWritesNothingAndReportsStatus(t *testing.T) {
+	v := testVault(t)
+	target := filepath.Join(t.TempDir(), "proj", "AGENTS.md")
+	a := adapter.AgentsMD{Cfg: vault.AdapterConfig{Enabled: true, Targets: []string{target}}}
+
+	report, err := a.Apply(v, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.DryRun {
+		t.Fatal("the report must carry DryRun true")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not create the target file")
+	}
+	applied := strings.Join(report.Applied, "|")
+	if !strings.Contains(applied, "memory: block would change") {
+		t.Fatalf("a not-yet-synced target must report the block would change, got %v", report.Applied)
+	}
+
+	if _, err := a.Apply(v, false); err != nil {
+		t.Fatal(err)
+	}
+	report, err = a.Apply(v, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied = strings.Join(report.Applied, "|")
+	if !strings.Contains(applied, "memory: up to date") {
+		t.Fatalf("a synced target must report up to date, got %v", report.Applied)
+	}
+}
+
 func TestAgentsMDApplyRefusesFactWithMark(t *testing.T) {
 	v := testVault(t)
 	os.WriteFile(filepath.Join(v.MemoryDir(), "stack.md"),

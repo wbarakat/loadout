@@ -287,6 +287,54 @@ func TestSyncJSON(t *testing.T) {
 	}
 }
 
+func TestSyncDryRunJSON(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+	run(t, "sync")
+
+	out, errOut, code := run(t, "sync", "--dry-run", "--json")
+	if code != 0 {
+		t.Fatalf("sync --dry-run --json failed: %s", errOut)
+	}
+	var got struct {
+		Reports []struct {
+			Adapter string   `json:"adapter"`
+			DryRun  bool     `json:"dry_run"`
+			Applied []string `json:"applied"`
+		} `json:"reports"`
+		Snapshot bool `json:"snapshot"`
+		DryRun   bool `json:"dry_run"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("sync --dry-run --json did not parse: %v\noutput: %s", err, out)
+	}
+	if !got.DryRun {
+		t.Fatalf("dry_run must be true, got %+v", got)
+	}
+	if got.Snapshot {
+		t.Fatalf("snapshot must be false on a dry run, got %+v", got)
+	}
+	if len(got.Reports) == 0 {
+		t.Fatalf("reports must be non-empty, got %+v", got)
+	}
+	for _, r := range got.Reports {
+		if !r.DryRun {
+			t.Fatalf("each report must carry dry_run true, got %+v", r)
+		}
+		found := false
+		for _, a := range r.Applied {
+			if a == "memory: up to date" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("a dry run after a real sync must report memory up to date, got %+v", r)
+		}
+	}
+}
+
 func TestShowJSON(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")

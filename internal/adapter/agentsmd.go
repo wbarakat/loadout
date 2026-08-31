@@ -51,11 +51,15 @@ func (a AgentsMD) Apply(v *vault.Vault, dry bool) (Report, error) {
 	if err != nil {
 		return report, err
 	}
+	trimmed := strings.TrimSpace(content)
 	for _, target := range a.Cfg.Targets {
-		if !dry {
-			if err := WriteManagedBlock(vault.ExpandPath(target), content); err != nil {
-				return report, err
-			}
+		path := vault.ExpandPath(target)
+		if dry {
+			report.Applied = append(report.Applied, managedBlockDryMsg(path, trimmed))
+			continue
+		}
+		if err := WriteManagedBlock(path, content); err != nil {
+			return report, err
 		}
 		report.Applied = append(report.Applied, "memory: block written")
 	}

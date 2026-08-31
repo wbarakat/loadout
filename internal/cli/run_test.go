@@ -184,6 +184,102 @@ func TestSyncProjectsVault(t *testing.T) {
 	}
 }
 
+func TestSyncDryRunFreshVaultLeavesHomeUntouched(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+
+	out, errOut, code := run(t, "sync", "--dry-run")
+	if code != 0 {
+		t.Fatalf("sync --dry-run failed: %s", errOut)
+	}
+	if !strings.Contains(out, "would sync claude-code (1 to link, 0 to prune)") {
+		t.Fatalf("bad dry-run output: %q", out)
+	}
+	if !strings.Contains(out, "would sync pi (1 to link, 0 to prune)") {
+		t.Fatalf("bad dry-run output: %q", out)
+	}
+	home := filepath.Join(base, "home")
+	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not create CLAUDE.md")
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".claude", "skills", "deploy-checks")); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not create the claude-code skill link")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".pi", "agent", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not create the pi memory file")
+	}
+	if _, err := os.Stat(filepath.Join(base, "vault", "render", "memory.md")); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not write the rendered memory file")
+	}
+	logOut, _, _ := run(t, "log")
+	lines := strings.Split(strings.TrimRight(logOut, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("a dry run must not snapshot, got log %q", logOut)
+	}
+}
+
+func TestSyncDryRunAfterRealSyncReportsUpToDate(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+	run(t, "sync")
+
+	out, errOut, code := run(t, "sync", "--dry-run")
+	if code != 0 {
+		t.Fatalf("sync --dry-run failed: %s", errOut)
+	}
+	if !strings.Contains(out, "would sync claude-code (0 to link, 0 to prune)") {
+		t.Fatalf("bad dry-run output: %q", out)
+	}
+	if !strings.Contains(out, "would sync pi (0 to link, 0 to prune)") {
+		t.Fatalf("bad dry-run output: %q", out)
+	}
+}
+
+func TestSyncDryRunReportsBlockedPathAndExitsZero(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+
+	home := filepath.Join(base, "home")
+	blockedPath := filepath.Join(home, ".claude", "skills", "deploy-checks")
+	if err := os.MkdirAll(blockedPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := run(t, "sync", "--dry-run")
+	if code != 0 {
+		t.Fatalf("sync --dry-run must exit 0 despite a blocked skill, got %d (%s)", code, errOut)
+	}
+	if !strings.Contains(errOut, blockedPath) {
+		t.Fatalf("errOut must name the blocked path in the dry report, got %q", errOut)
+	}
+	if !strings.Contains(out, "would sync claude-code (0 to link, 0 to prune)") {
+		t.Fatalf("bad dry-run output: %q", out)
+	}
+}
+
+func TestSyncDryRunFlagAcceptedInAnyPosition(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+
+	out, errOut, code := run(t, "sync", "--json", "--dry-run")
+	if code != 0 {
+		t.Fatalf("sync --json --dry-run failed: %s", errOut)
+	}
+	if !strings.Contains(out, `"dry_run": true`) {
+		t.Fatalf("--dry-run before --json must still be recognized, got %q", out)
+	}
+	home := filepath.Join(base, "home")
+	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not create CLAUDE.md")
+	}
+}
+
 func TestSyncLinksSymlinkedSkillDir(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")

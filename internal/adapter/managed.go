@@ -92,6 +92,18 @@ func writeFileAtomic(path string, data []byte) error {
 	return os.Rename(tmpPath, path)
 }
 
+// managedBlockDryMsg reports what a dry run would do to the managed
+// block at path, without writing anything: "memory: up to date" when
+// the block already holds want, "memory: block would change"
+// otherwise (including when the block or the file is missing).
+func managedBlockDryMsg(path, want string) string {
+	got, ok := ReadManagedBlock(path)
+	if ok && got == want {
+		return "memory: up to date"
+	}
+	return "memory: block would change"
+}
+
 // ReadManagedBlock returns the trimmed block content, and whether a
 // well-formed block exists. Return ("", false) if marks are damaged or
 // missing.

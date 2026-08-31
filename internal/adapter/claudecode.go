@@ -33,15 +33,18 @@ func (a ClaudeCode) Apply(v *vault.Vault, dry bool) (Report, error) {
 		return report, err
 	}
 	renderPath := filepath.Join(v.RenderDir(), "memory.md")
-	if !dry {
+	memoryFile := vault.ExpandPath(a.Cfg.MemoryFile)
+	if dry {
+		report.Applied = append(report.Applied, managedBlockDryMsg(memoryFile, a.memoryImport(v)))
+	} else {
 		if err := writeFileAtomic(renderPath, []byte(vault.RenderMemory(facts))); err != nil {
 			return report, err
 		}
-		if err := WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), a.memoryImport(v)); err != nil {
+		if err := WriteManagedBlock(memoryFile, a.memoryImport(v)); err != nil {
 			return report, err
 		}
+		report.Applied = append(report.Applied, "memory: block written")
 	}
-	report.Applied = append(report.Applied, "memory: block written")
 	skillsDir := vault.ExpandPath(a.Cfg.SkillsDir)
 	applied, pruned, blocked, err := LinkSkills(skills, v.SkillsDir(), skillsDir, dry)
 	if err != nil {

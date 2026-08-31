@@ -27,12 +27,16 @@ func (a Pi) Apply(v *vault.Vault, dry bool) (Report, error) {
 	if err := scanForMarks(facts, skills); err != nil {
 		return report, err
 	}
-	if !dry {
-		if err := WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), vault.RenderMemory(facts)); err != nil {
+	memoryFile := vault.ExpandPath(a.Cfg.MemoryFile)
+	content := vault.RenderMemory(facts)
+	if dry {
+		report.Applied = append(report.Applied, managedBlockDryMsg(memoryFile, strings.TrimSpace(content)))
+	} else {
+		if err := WriteManagedBlock(memoryFile, content); err != nil {
 			return report, err
 		}
+		report.Applied = append(report.Applied, "memory: block written")
 	}
-	report.Applied = append(report.Applied, "memory: block written")
 	skillsDir := vault.ExpandPath(a.Cfg.SkillsDir)
 	applied, pruned, blocked, err := LinkSkills(skills, v.SkillsDir(), skillsDir, dry)
 	if err != nil {

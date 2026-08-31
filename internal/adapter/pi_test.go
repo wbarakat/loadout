@@ -41,6 +41,47 @@ func TestPiApplyAndCheck(t *testing.T) {
 	}
 }
 
+func TestPiApplyDryRunWritesNothingAndReportsStatus(t *testing.T) {
+	v := testVault(t)
+	home := t.TempDir()
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".pi", "agent", "skills"),
+		MemoryFile: filepath.Join(home, ".pi", "AGENTS.md"),
+	}
+	a := adapter.Pi{Cfg: cfg}
+
+	report, err := a.Apply(v, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.DryRun {
+		t.Fatal("the report must carry DryRun true")
+	}
+	if _, err := os.Stat(cfg.MemoryFile); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not create the memory file")
+	}
+	if _, err := os.Lstat(filepath.Join(cfg.SkillsDir, "deploy-checks")); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not create the skill link")
+	}
+	applied := strings.Join(report.Applied, "|")
+	if !strings.Contains(applied, "memory: block would change") {
+		t.Fatalf("a not-yet-synced target must report the block would change, got %v", report.Applied)
+	}
+
+	if _, err := a.Apply(v, false); err != nil {
+		t.Fatal(err)
+	}
+	report, err = a.Apply(v, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied = strings.Join(report.Applied, "|")
+	if !strings.Contains(applied, "memory: up to date") {
+		t.Fatalf("a synced target must report up to date, got %v", report.Applied)
+	}
+}
+
 func TestPiApplyProjectsMemoryDespiteBlockedSkill(t *testing.T) {
 	v := testVault(t)
 	home := t.TempDir()

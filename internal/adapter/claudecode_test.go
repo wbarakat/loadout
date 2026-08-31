@@ -72,6 +72,55 @@ func TestClaudeCodeApplyAndCheck(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeApplyDryRunWritesNothingAndReportsStatus(t *testing.T) {
+	v := testVault(t)
+	home := t.TempDir()
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".claude", "skills"),
+		MemoryFile: filepath.Join(home, ".claude", "CLAUDE.md"),
+	}
+	a := adapter.ClaudeCode{Cfg: cfg}
+
+	report, err := a.Apply(v, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.DryRun {
+		t.Fatal("the report must carry DryRun true")
+	}
+	if _, err := os.Stat(cfg.MemoryFile); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not create CLAUDE.md")
+	}
+	if _, err := os.Stat(filepath.Join(v.RenderDir(), "memory.md")); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not write the rendered memory file")
+	}
+	if _, err := os.Lstat(filepath.Join(cfg.SkillsDir, "deploy-checks")); !os.IsNotExist(err) {
+		t.Fatal("a dry run must not create the skill link")
+	}
+	applied := strings.Join(report.Applied, "|")
+	if !strings.Contains(applied, "memory: block would change") {
+		t.Fatalf("a not-yet-synced target must report the block would change, got %v", report.Applied)
+	}
+
+	// Sync for real, then a dry run must report up to date.
+	if _, err := a.Apply(v, false); err != nil {
+		t.Fatal(err)
+	}
+	report, err = a.Apply(v, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied = strings.Join(report.Applied, "|")
+	if !strings.Contains(applied, "memory: up to date") {
+		t.Fatalf("a synced target must report up to date, got %v", report.Applied)
+	}
+	// The dry run after a real sync must still write nothing new.
+	if _, err := os.Lstat(filepath.Join(cfg.SkillsDir, "deploy-checks")); err != nil {
+		t.Fatal("the earlier real sync's link must still be present")
+	}
+}
+
 func TestClaudeCodeApplyReportsBlockedSkill(t *testing.T) {
 	v := testVault(t)
 	home := t.TempDir()
