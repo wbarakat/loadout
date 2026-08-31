@@ -56,6 +56,28 @@ func TestSetReviewKeptAddsMissingLine(t *testing.T) {
 	}
 }
 
+func TestSetReviewKeptNormalizesCRLFAndBOM(t *testing.T) {
+	v := newVault(t)
+	path := filepath.Join(v.MemoryDir(), "x.md")
+	content := "\ufeff---\r\nname: x\r\ndescription: a fact\r\nreview: draft\r\n---\r\n\r\nBody text.\r\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := vault.SetReviewKept(path); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\nname: x\ndescription: a fact\nreview: kept\n---\n\nBody text.\n"
+	if string(data) != want {
+		t.Fatalf("bad rewrite:\ngot  %q\nwant %q", data, want)
+	}
+}
+
 func TestSetReviewKeptPreservesFileMode(t *testing.T) {
 	v := newVault(t)
 	path := filepath.Join(v.MemoryDir(), "x.md")

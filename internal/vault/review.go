@@ -8,24 +8,30 @@ import (
 )
 
 // SetReviewKept rewrites path's review frontmatter line to
-// "review: kept". It changes only that one line. Every other byte of
-// the file stays the same, including exact whitespace. When the file
-// has no review line yet, SetReviewKept adds one just before the
-// closing "---". The write is atomic, so a reader never sees a
-// partial file.
+// "review: kept". It changes only that one line. For a plain file
+// with LF line endings and no byte order mark, every other byte
+// stays the same, including exact whitespace. For a file with a
+// leading byte order mark or CRLF line endings, SetReviewKept applies
+// the same tolerance ListSkills and ListFacts apply on read: it
+// strips the mark and turns CRLF into LF, so the file it writes back
+// holds plain LF lines with no mark. When the file has no review
+// line yet, SetReviewKept adds one just before the closing "---". The
+// write is atomic, so a reader never sees a partial file.
 func SetReviewKept(path string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	text := string(raw)
+	text = strings.TrimPrefix(text, "\ufeff")
+	text = strings.ReplaceAll(text, "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
-		return fmt.Errorf("%s: has no frontmatter to review", path)
+		return fmt.Errorf("%s: the item has no frontmatter block. Fix: add a --- frontmatter block with a review: line.", path)
 	}
 	rest := text[len("---\n"):]
 	end := strings.Index(rest, "\n---")
 	if end < 0 {
-		return fmt.Errorf("%s: the frontmatter has no closing marker", path)
+		return fmt.Errorf("%s: the frontmatter block has no closing ---. Fix: repair the frontmatter block.", path)
 	}
 
 	lines := strings.Split(rest[:end], "\n")

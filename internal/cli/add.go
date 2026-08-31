@@ -18,7 +18,8 @@ func cmdAdd(out, errOut io.Writer, args []string) int {
 		fmt.Fprintln(errOut, addUsage)
 		return 2
 	}
-	if err := validateBy(by); err != nil {
+	by, err := validateBy(by)
+	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return 2
 	}
@@ -56,20 +57,24 @@ func cmdAdd(out, errOut io.Writer, args []string) int {
 // the vault frontmatter.
 const maxByLength = 64
 
-// validateBy rejects a --by value that could corrupt the frontmatter
-// line it lands in: one with a newline or carriage return, one with
-// leading or trailing whitespace, or one over maxByLength characters.
-func validateBy(by string) error {
-	if strings.ContainsAny(by, "\n\r") {
-		return fmt.Errorf("%q: not a valid --by value. Fix: remove the newline or carriage return.", by)
+// validateBy trims a --by value's leading and trailing whitespace,
+// then rejects the trimmed value if it would still corrupt the
+// frontmatter line it lands in: one with an embedded newline or
+// carriage return, one empty after the trim, or one over
+// maxByLength characters. It returns the trimmed value, so a value
+// like " pi " lands in the vault as "pi".
+func validateBy(by string) (string, error) {
+	trimmed := strings.TrimSpace(by)
+	if strings.ContainsAny(trimmed, "\n\r") {
+		return "", fmt.Errorf("%q: not a valid --by value. Fix: remove the newline or carriage return.", by)
 	}
-	if strings.TrimSpace(by) != by {
-		return fmt.Errorf("%q: not a valid --by value. Fix: remove the leading or trailing whitespace.", by)
+	if trimmed == "" {
+		return "", fmt.Errorf("%q: not a valid --by value. Fix: use a non-empty name.", by)
 	}
-	if len(by) > maxByLength {
-		return fmt.Errorf("%q: not a valid --by value. Fix: use %d characters or fewer.", by, maxByLength)
+	if len(trimmed) > maxByLength {
+		return "", fmt.Errorf("%q: not a valid --by value. Fix: use %d characters or fewer.", by, maxByLength)
 	}
-	return nil
+	return trimmed, nil
 }
 
 // parseAddArgs reads "skill|memory <name> [--by <who>]" from args. by

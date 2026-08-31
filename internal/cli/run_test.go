@@ -819,7 +819,7 @@ func TestReviewUnknownSubcommandIsUsageError(t *testing.T) {
 func TestAddByFlagRejectsMalformedValue(t *testing.T) {
 	setupEnv(t)
 	run(t, "init")
-	for _, by := range []string{"pi\nother", "pi\rother", " pi", "pi ", strings.Repeat("a", 65)} {
+	for _, by := range []string{"pi\nother", "pi\rother", "   ", strings.Repeat("a", 65)} {
 		_, errOut, code := run(t, "add", "memory", "x", "--by", by)
 		if code != 2 {
 			t.Fatalf("a bad --by value %q must exit 2, got %d %q", by, code, errOut)
@@ -827,6 +827,25 @@ func TestAddByFlagRejectsMalformedValue(t *testing.T) {
 		if !strings.Contains(errOut, "Fix:") {
 			t.Fatalf("a bad --by value %q must use the standard error grammar, got %q", by, errOut)
 		}
+	}
+}
+
+func TestAddByFlagTrimsSurroundingWhitespace(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	if _, errOut, code := run(t, "add", "memory", "x", "--by", " pi "); code != 0 {
+		t.Fatalf("a --by value with surrounding whitespace must succeed, got %d %q", code, errOut)
+	}
+	data, err := os.ReadFile(filepath.Join(base, "vault", "memory", "x.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "by: pi\n") {
+		t.Fatalf("the --by value must be trimmed before it is stored, got:\n%s", text)
+	}
+	if strings.Contains(text, "by:  pi") || strings.Contains(text, "pi \n") {
+		t.Fatalf("the stored value must not retain surrounding whitespace, got:\n%s", text)
 	}
 }
 
