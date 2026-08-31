@@ -53,3 +53,39 @@ func TestReadManagedBlockMissing(t *testing.T) {
 		t.Fatal("must report missing")
 	}
 }
+
+func TestWriteManagedBlockRefusesDamagedMarks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "CLAUDE.md")
+	orig := "<!-- loadout:begin -->\nsome text\n"
+	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.WriteManagedBlock(path, "v1"); err == nil {
+		t.Fatal("an orphan begin mark must be an error")
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != orig {
+		t.Fatal("the file must stay unchanged")
+	}
+	if _, ok := adapter.ReadManagedBlock(path); ok {
+		t.Fatal("read must report no block")
+	}
+}
+
+func TestWriteManagedBlockRefusesTwoBlocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "AGENTS.md")
+	two := "<!-- loadout:begin -->\na\n<!-- loadout:end -->\nmiddle\n<!-- loadout:begin -->\nb\n<!-- loadout:end -->\n"
+	if err := os.WriteFile(path, []byte(two), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.WriteManagedBlock(path, "v1"); err == nil {
+		t.Fatal("two blocks must be an error")
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != two {
+		t.Fatal("the file must stay unchanged")
+	}
+	if _, ok := adapter.ReadManagedBlock(path); ok {
+		t.Fatal("read must report no block")
+	}
+}
