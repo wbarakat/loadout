@@ -20,7 +20,7 @@ type Adapter interface {
 // stable order.
 func Enabled(v *vault.Vault) []Adapter {
 	var out []Adapter
-	for _, name := range []string{"claude-code", "pi", "agents-md"} {
+	for _, name := range []string{"claude-code", "pi", "codex", "agents-md"} {
 		cfg, ok := v.Manifest.Adapters[name]
 		if !ok || !cfg.Enabled {
 			continue
@@ -30,6 +30,8 @@ func Enabled(v *vault.Vault) []Adapter {
 			out = append(out, ClaudeCode{Cfg: cfg})
 		case "pi":
 			out = append(out, Pi{Cfg: cfg})
+		case "codex":
+			out = append(out, Codex{Cfg: cfg})
 		case "agents-md":
 			out = append(out, AgentsMD{Cfg: cfg})
 		}
