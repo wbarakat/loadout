@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"fmt"
 	"strings"
 
 	"loadout.dev/loadout/internal/vault"
@@ -63,11 +64,19 @@ func (a Pi) Check(v *vault.Vault) []Problem {
 		p.Adapter = a.Name()
 		ps = append(ps, p)
 	}
+	memoryFile := vault.ExpandPath(a.Cfg.MemoryFile)
+	if err := checkManagedBlockDamage(memoryFile); err != nil {
+		// Damaged marks need a repair, not a sync: a sync would refuse
+		// to touch the file too, so telling the user to sync it is a
+		// dead end.
+		ps = append(ps, Problem{a.Name(), fmt.Sprintf("the loadout marks in %s are damaged", memoryFile), fmt.Sprintf("repair or remove the marks in %s.", memoryFile)})
+		return ps
+	}
 	facts, err := vault.ListFacts(v)
 	if err != nil {
 		return append(ps, Problem{a.Name(), err.Error(), "repair the vault memory directory"})
 	}
-	got, ok := ReadManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile))
+	got, ok := ReadManagedBlock(memoryFile)
 	if !ok || got != strings.TrimSpace(renderProjection(facts)) {
 		ps = append(ps, Problem{a.Name(), "the memory block is missing or stale", "run: loadout sync"})
 	}

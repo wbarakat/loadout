@@ -197,6 +197,85 @@ func TestClaudeCodeApplyProjectsMemoryDespiteBlockedSkill(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeApplyDryRunDetectsStaleRenderAfterFactEdit proves a
+// dry run catches a render that has drifted from the vault even
+// though CLAUDE.md's import line still matches: a fact edited
+// straight in the vault, with no sync run since. It also proves
+// Check agrees, since a dry run and doctor must never disagree about
+// whether the block is stale.
+func TestClaudeCodeApplyDryRunDetectsStaleRenderAfterFactEdit(t *testing.T) {
+	v := testVault(t)
+	home := t.TempDir()
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".claude", "skills"),
+		MemoryFile: filepath.Join(home, ".claude", "CLAUDE.md"),
+	}
+	a := adapter.ClaudeCode{Cfg: cfg}
+
+	if _, err := a.Apply(v, false); err != nil {
+		t.Fatal(err)
+	}
+	// Edit the fact directly, bypassing Apply, so CLAUDE.md's import
+	// line still matches but render/memory.md is now stale.
+	if err := os.WriteFile(filepath.Join(v.MemoryDir(), "stack.md"),
+		[]byte("---\nname: stack\n---\nI use Rust now.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := a.Apply(v, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := strings.Join(report.Applied, "|")
+	if !strings.Contains(applied, "memory: block would change") {
+		t.Fatalf("a stale render must report block would change even though the import line is unchanged, got %v", report.Applied)
+	}
+	if ps := a.Check(v); len(ps) == 0 {
+		t.Fatal("Check must flag the same staleness the dry run just reported")
+	}
+}
+
+// TestClaudeCodeCheckReportsDamagedMarksNotSyncFix proves doctor's
+// Check gives the right repair for a damaged managed block: the fix
+// names the repair itself, not the dead-end "run: loadout sync".
+func TestClaudeCodeCheckReportsDamagedMarksNotSyncFix(t *testing.T) {
+	v := testVault(t)
+	home := t.TempDir()
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".claude", "skills"),
+		MemoryFile: filepath.Join(home, ".claude", "CLAUDE.md"),
+	}
+	a := adapter.ClaudeCode{Cfg: cfg}
+	if _, err := a.Apply(v, false); err != nil {
+		t.Fatal(err)
+	}
+	corrupted := "<!-- loadout:begin -->\na\n<!-- loadout:begin -->\nb\n<!-- loadout:end -->\n"
+	if err := os.WriteFile(cfg.MemoryFile, []byte(corrupted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ps := a.Check(v)
+	if len(ps) == 0 {
+		t.Fatal("Check must report the damaged marks")
+	}
+	for _, p := range ps {
+		if p.Fix == "run: loadout sync" {
+			t.Fatalf("a damaged file must not get the plain sync fix, got %+v", ps)
+		}
+	}
+	found := false
+	for _, p := range ps {
+		if strings.Contains(p.Detail, "damaged") && strings.Contains(p.Fix, cfg.MemoryFile) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Check must name the damage repair for %s, got %+v", cfg.MemoryFile, ps)
+	}
+}
+
 func TestClaudeCodeApplyRefusesFactWithMark(t *testing.T) {
 	v := testVault(t)
 	os.WriteFile(filepath.Join(v.MemoryDir(), "stack.md"),

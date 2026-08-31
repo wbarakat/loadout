@@ -27,6 +27,19 @@ func git(v *Vault, args ...string) (string, error) {
 	return out.String(), nil
 }
 
+// noHistoryErr turns a git failure into a fixed, friendly error when
+// the cause is a vault with no history at all — for example, one
+// someone removed .git from by hand. It leaves any other git failure
+// alone, so a real git problem still shows its own message. log,
+// context, and undo call this on a git error, so a dead vault never
+// stares back with a bare git failure.
+func noHistoryErr(v *Vault, gitErr error) error {
+	if _, err := os.Stat(filepath.Join(v.Root, ".git")); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("the vault at %s has no history. Fix: run loadout doctor.", v.Root)
+	}
+	return gitErr
+}
+
 func initHistory(v *Vault) error {
 	if _, err := git(v, "init", "-q", "-b", "main"); err != nil {
 		return err
@@ -64,7 +77,7 @@ func EmbeddedSkillRepos(v *Vault) ([]string, error) {
 func RecentSubjects(v *Vault, n int) ([]string, error) {
 	out, err := git(v, "log", "--format=%s", "-n", strconv.Itoa(n))
 	if err != nil {
-		return nil, err
+		return nil, noHistoryErr(v, err)
 	}
 	var subjects []string
 	for _, line := range strings.Split(out, "\n") {

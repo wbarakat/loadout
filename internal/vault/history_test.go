@@ -48,6 +48,24 @@ func TestRecentSubjectsCapsAtN(t *testing.T) {
 	}
 }
 
+// TestRecentSubjectsOnMissingGitGivesFixedError proves that a vault
+// whose .git directory is gone gets a fixed, friendly error instead
+// of a raw git failure.
+func TestRecentSubjectsOnMissingGitGivesFixedError(t *testing.T) {
+	v := newVault(t)
+	if err := os.RemoveAll(filepath.Join(v.Root, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := vault.RecentSubjects(v, 3)
+	if err == nil {
+		t.Fatal("RecentSubjects on a vault with no history must fail")
+	}
+	want := "the vault at " + v.Root + " has no history. Fix: run loadout doctor."
+	if err.Error() != want {
+		t.Fatalf("bad error: got %q want %q", err.Error(), want)
+	}
+}
+
 func TestSnapshotRefusesEmbeddedGitRepo(t *testing.T) {
 	v := newVault(t)
 	dir := filepath.Join(v.SkillsDir(), "deploy-checks")

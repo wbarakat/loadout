@@ -60,6 +60,24 @@ func TestHistoryCapsAtN(t *testing.T) {
 	}
 }
 
+// TestHistoryOnMissingGitGivesFixedError proves that a vault whose
+// .git directory is gone gets a fixed, friendly error instead of a
+// raw git failure.
+func TestHistoryOnMissingGitGivesFixedError(t *testing.T) {
+	v := newVault(t)
+	if err := os.RemoveAll(filepath.Join(v.Root, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := vault.History(v, 20)
+	if err == nil {
+		t.Fatal("History on a vault with no history must fail")
+	}
+	want := "the vault at " + v.Root + " has no history. Fix: run loadout doctor."
+	if err.Error() != want {
+		t.Fatalf("bad error: got %q want %q", err.Error(), want)
+	}
+}
+
 func TestUndoOnFreshVaultErrors(t *testing.T) {
 	v := newVault(t)
 	err := vault.Undo(v)

@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -38,7 +39,18 @@ func (a ClaudeCode) Apply(v *vault.Vault, dry bool) (Report, error) {
 		if err := checkManagedBlockDamage(memoryFile); err != nil {
 			return report, err
 		}
-		report.Applied = append(report.Applied, managedBlockDryMsg(memoryFile, a.memoryImport(v)))
+		msg := managedBlockDryMsg(memoryFile, a.memoryImport(v))
+		// The import line can still match while the file it points to
+		// has drifted: a fact edited straight in the vault, with no
+		// sync run since. Check the render too, so a dry run and
+		// doctor's Check always agree on whether the block is stale.
+		if msg == "memory: up to date" {
+			data, err := os.ReadFile(renderPath)
+			if err != nil || string(data) != renderProjection(facts) {
+				msg = "memory: block would change"
+			}
+		}
+		report.Applied = append(report.Applied, msg)
 	} else {
 		if err := writeFileAtomic(renderPath, []byte(renderProjection(facts))); err != nil {
 			return report, err
@@ -71,7 +83,15 @@ func (a ClaudeCode) Check(v *vault.Vault) []Problem {
 		p.Adapter = a.Name()
 		ps = append(ps, p)
 	}
-	got, ok := ReadManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile))
+	memoryFile := vault.ExpandPath(a.Cfg.MemoryFile)
+	if err := checkManagedBlockDamage(memoryFile); err != nil {
+		// Damaged marks need a repair, not a sync: a sync would refuse
+		// to touch the file too, so telling the user to sync it is a
+		// dead end.
+		ps = append(ps, Problem{a.Name(), fmt.Sprintf("the loadout marks in %s are damaged", memoryFile), fmt.Sprintf("repair or remove the marks in %s.", memoryFile)})
+		return ps
+	}
+	got, ok := ReadManagedBlock(memoryFile)
 	if !ok || got != a.memoryImport(v) {
 		ps = append(ps, Problem{a.Name(), "the memory import block is missing or stale", "run: loadout sync"})
 	}

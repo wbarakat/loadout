@@ -19,7 +19,7 @@ type HistoryEntry struct {
 func History(v *Vault, n int) ([]HistoryEntry, error) {
 	out, err := git(v, "log", "--format=%ad|%s", "--date=short", "-n", strconv.Itoa(n))
 	if err != nil {
-		return nil, err
+		return nil, noHistoryErr(v, err)
 	}
 	var entries []HistoryEntry
 	for _, line := range strings.Split(out, "\n") {
@@ -51,7 +51,7 @@ func History(v *Vault, n int) ([]HistoryEntry, error) {
 func Undo(v *Vault) error {
 	out, err := git(v, "log", "--format=%H", "-n", "2")
 	if err != nil {
-		return err
+		return noHistoryErr(v, err)
 	}
 	var hashes []string
 	for _, line := range strings.Split(out, "\n") {

@@ -194,10 +194,10 @@ func TestSyncDryRunFreshVaultLeavesHomeUntouched(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("sync --dry-run failed: %s", errOut)
 	}
-	if !strings.Contains(out, "would sync claude-code (1 to link, 0 to prune)") {
+	if !strings.Contains(out, "would sync claude-code (1 to link, 0 to prune; memory: block would change)") {
 		t.Fatalf("bad dry-run output: %q", out)
 	}
-	if !strings.Contains(out, "would sync pi (1 to link, 0 to prune)") {
+	if !strings.Contains(out, "would sync pi (1 to link, 0 to prune; memory: block would change)") {
 		t.Fatalf("bad dry-run output: %q", out)
 	}
 	home := filepath.Join(base, "home")
@@ -231,10 +231,10 @@ func TestSyncDryRunAfterRealSyncReportsUpToDate(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("sync --dry-run failed: %s", errOut)
 	}
-	if !strings.Contains(out, "would sync claude-code (0 to link, 0 to prune)") {
+	if !strings.Contains(out, "would sync claude-code (0 to link, 0 to prune; memory: up to date)") {
 		t.Fatalf("bad dry-run output: %q", out)
 	}
-	if !strings.Contains(out, "would sync pi (0 to link, 0 to prune)") {
+	if !strings.Contains(out, "would sync pi (0 to link, 0 to prune; memory: up to date)") {
 		t.Fatalf("bad dry-run output: %q", out)
 	}
 }
@@ -257,7 +257,7 @@ func TestSyncDryRunReportsBlockedPathAndExitsZero(t *testing.T) {
 	if !strings.Contains(errOut, blockedPath) {
 		t.Fatalf("errOut must name the blocked path in the dry report, got %q", errOut)
 	}
-	if !strings.Contains(out, "would sync claude-code (0 to link, 0 to prune)") {
+	if !strings.Contains(out, "would sync claude-code (0 to link, 0 to prune; memory: block would change)") {
 		t.Fatalf("bad dry-run output: %q", out)
 	}
 }
@@ -1018,5 +1018,108 @@ func TestDoctorReportsMissingHistory(t *testing.T) {
 	}
 	if !strings.Contains(out, "the vault history is missing") {
 		t.Fatalf("doctor must report the missing history, got %q", out)
+	}
+}
+
+// TestNoArgVerbsRejectLeftoverArguments proves that a verb with no
+// positional arguments never silently ignores one: every extra
+// argument is a usage error, exit 2.
+func TestNoArgVerbsRejectLeftoverArguments(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	for _, args := range [][]string{
+		{"init", "extra"},
+		{"status", "extra"},
+		{"doctor", "extra"},
+		{"list", "extra"},
+		{"context", "extra"},
+		{"log", "extra"},
+		{"help", "extra"},
+	} {
+		_, errOut, code := run(t, args...)
+		if code != 2 || !strings.Contains(errOut, "usage") {
+			t.Fatalf("%v must be a usage error, got %d %q", args, code, errOut)
+		}
+	}
+}
+
+// TestSyncRejectsUnknownFlagAndDoesNotSync proves the critical case:
+// a mistyped flag on a mutating verb must never ride along and run
+// the command anyway.
+func TestSyncRejectsUnknownFlagAndDoesNotSync(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+
+	_, errOut, code := run(t, "sync", "--dry")
+	if code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("sync --dry must be a usage error, got %d %q", code, errOut)
+	}
+	home := filepath.Join(base, "home")
+	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Fatal("sync --dry must not sync anything")
+	}
+}
+
+// TestUndoRejectsExtraArgsAndDoesNotUndo proves the same for undo:
+// undo takes no flags at all, so even a flag sync understands must
+// still be a usage error here, and must not touch the vault.
+func TestUndoRejectsExtraArgsAndDoesNotUndo(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "fact1")
+
+	_, errOut, code := run(t, "undo", "--dry-run")
+	if code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("undo --dry-run must be a usage error, got %d %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(base, "vault", "memory", "fact1.md")); err != nil {
+		t.Fatal("undo --dry-run must not undo anything")
+	}
+}
+
+// TestContextOnMissingHistoryGivesFixedMessage proves that context,
+// one of the three history readers, turns a bare git failure on a
+// vault with no .git directory into the fixed, friendly message.
+func TestContextOnMissingHistoryGivesFixedMessage(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	if err := os.RemoveAll(filepath.Join(base, "vault", ".git")); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := run(t, "context")
+	if code != 1 {
+		t.Fatalf("context on a vault with no history must exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut, "has no history") || !strings.Contains(errOut, "loadout doctor") {
+		t.Fatalf("bad error: got %q", errOut)
+	}
+}
+
+// TestDoctorReportsDamagedMarksWithRepairFix proves doctor gives the
+// right repair for a damaged managed block: the fix names the repair
+// itself, not the dead-end "run: loadout sync".
+func TestDoctorReportsDamagedMarksWithRepairFix(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "sync")
+
+	home := filepath.Join(base, "home")
+	claudeMd := filepath.Join(home, ".claude", "CLAUDE.md")
+	corrupted := "<!-- loadout:begin -->\na\n<!-- loadout:begin -->\nb\n<!-- loadout:end -->\n"
+	if err := os.WriteFile(claudeMd, []byte(corrupted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := run(t, "doctor")
+	if code != 1 {
+		t.Fatalf("doctor must report a problem, got %d", code)
+	}
+	if !strings.Contains(out, claudeMd) || !strings.Contains(out, "damaged") {
+		t.Fatalf("doctor must name the damaged file, got %q", out)
+	}
+	if strings.Contains(out, "run: loadout sync") {
+		t.Fatalf("doctor must not offer the dead-end sync fix for a damaged file, got %q", out)
 	}
 }

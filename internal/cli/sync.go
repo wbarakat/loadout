@@ -33,7 +33,11 @@ func extractDryRun(args []string) ([]string, bool) {
 }
 
 func cmdSync(out, errOut io.Writer, args []string, m mode) int {
-	_, dry := extractDryRun(args)
+	rest, dry := extractDryRun(args)
+	if len(rest) > 0 {
+		fmt.Fprint(errOut, usage)
+		return 2
+	}
 	v, err := vault.Open(vault.DefaultRoot())
 	if err != nil {
 		fmt.Fprintln(errOut, err)
@@ -58,7 +62,7 @@ func cmdSync(out, errOut io.Writer, args []string, m mode) int {
 		reports = append(reports, report)
 		if m != modeJSON {
 			if dry {
-				fmt.Fprintf(out, "would sync %s (%d to link, %d to prune)\n", a.Name(), countSkillLinks(report.Applied), len(report.Pruned))
+				fmt.Fprintf(out, "would sync %s (%d to link, %d to prune; memory: %s)\n", a.Name(), countSkillLinks(report.Applied), len(report.Pruned), memoryStatus(report.Applied))
 			} else {
 				fmt.Fprintf(out, "synced %s (%d linked, %d pruned)\n", a.Name(), countSkillLinks(report.Applied), len(report.Pruned))
 			}
@@ -98,4 +102,19 @@ func countSkillLinks(applied []string) int {
 		}
 	}
 	return n
+}
+
+// memoryStatus finds the one applied entry that reports the memory
+// block's status ("up to date" or "block would change") and returns
+// just that status word, for the dry summary line. Every adapter's
+// Apply call appends exactly one such entry, so this always finds
+// one in practice; it returns "" only if that ever stops holding.
+func memoryStatus(applied []string) string {
+	const prefix = "memory: "
+	for _, a := range applied {
+		if strings.HasPrefix(a, prefix) {
+			return strings.TrimPrefix(a, prefix)
+		}
+	}
+	return ""
 }
