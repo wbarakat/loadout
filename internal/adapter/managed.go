@@ -27,7 +27,7 @@ func WriteManagedBlock(path, content string) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(path, []byte(block+"\n"), 0o644)
+		return writeFileAtomic(path, []byte(block+"\n"))
 	}
 	if err != nil {
 		return err
@@ -42,7 +42,7 @@ func WriteManagedBlock(path, content string) error {
 			text += "\n"
 		}
 		text += "\n" + block + "\n"
-		return os.WriteFile(path, []byte(text), 0o644)
+		return writeFileAtomic(path, []byte(text))
 	}
 
 	// Exactly one of each mark: replace the block.
@@ -51,12 +51,41 @@ func WriteManagedBlock(path, content string) error {
 		j := strings.Index(text, endMark)
 		if i < j {
 			text = text[:i] + block + text[j+len(endMark):]
-			return os.WriteFile(path, []byte(text), 0o644)
+			return writeFileAtomic(path, []byte(text))
 		}
 	}
 
 	// Damaged marks: return error without writing.
 	return fmt.Errorf("the loadout marks in %s are damaged: repair or remove them", path)
+}
+
+// writeFileAtomic writes data to path so a reader never sees a partial
+// file. It writes to a temp file in the same directory, then renames
+// the temp file over path. It keeps path's existing mode, or uses
+// 0o644 for a new file.
+func writeFileAtomic(path string, data []byte) error {
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode()
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".loadout-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // ReadManagedBlock returns the trimmed block content, and whether a

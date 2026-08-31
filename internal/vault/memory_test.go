@@ -11,6 +11,7 @@ import (
 
 func newVault(t *testing.T) *vault.Vault {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	v, err := vault.Init(filepath.Join(t.TempDir(), "vault"))
 	if err != nil {
 		t.Fatal(err)

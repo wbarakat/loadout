@@ -3,6 +3,7 @@ package vault_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"loadout.dev/loadout/internal/vault"
@@ -37,6 +38,35 @@ func TestInitAndOpen(t *testing.T) {
 func TestOpenMissingVault(t *testing.T) {
 	if _, err := vault.Open(filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Fatal("open must fail without a vault")
+	}
+}
+
+func TestOpenCorruptManifest(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "loadout.toml"), []byte("not = [valid"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := vault.Open(root)
+	if err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Fatalf("a corrupt manifest must report it is unreadable, got %v", err)
+	}
+}
+
+func TestOpenRecreatesStructuralDirs(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "vault")
+	v, err := vault.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(v.MemoryDir()); err != nil {
+		t.Fatal(err)
+	}
+	v2, err := vault.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(v2.MemoryDir()); err != nil || !fi.IsDir() {
+		t.Fatal("Open must recreate a missing structural directory")
 	}
 }
 

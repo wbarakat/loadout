@@ -2,7 +2,9 @@ package vault
 
 import (
 	"bytes"
+	"fmt"
 	"os/exec"
+	"strings"
 )
 
 func git(v *Vault, args ...string) (string, error) {
@@ -11,7 +13,14 @@ func git(v *Vault, args ...string) (string, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
-	return out.String(), err
+	if err != nil {
+		msg := strings.TrimSpace(out.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return out.String(), fmt.Errorf("git %s failed: %s", args[0], msg)
+	}
+	return out.String(), nil
 }
 
 func initHistory(v *Vault) error {

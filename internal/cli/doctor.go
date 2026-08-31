@@ -34,6 +34,10 @@ func cmdDoctor(out, errOut io.Writer) int {
 		fmt.Fprintln(out, "all good")
 		return 0
 	}
-	fmt.Fprintf(out, "%d problems\n", count)
+	if count == 1 {
+		fmt.Fprintln(out, "1 problem")
+	} else {
+		fmt.Fprintf(out, "%d problems\n", count)
+	}
 	return 1
 }
