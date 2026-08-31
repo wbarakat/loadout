@@ -15,6 +15,8 @@ commands:
   show KIND/NAME             print an item's file
   list                       show every item
   edit KIND/NAME             open an item in $EDITOR
+  recall TERM...             find items matching every term
+  context                    show the compact picture of the vault
   sync                       project the vault into every enabled tool
   status                     show the vault and the adapter state
   doctor                     find problems and show the fix for each one
@@ -36,6 +38,10 @@ func Run(out, errOut io.Writer, args []string) int {
 		return cmdList(out, errOut)
 	case "edit":
 		return cmdEdit(out, errOut, args[1:])
+	case "recall":
+		return cmdRecall(out, errOut, args[1:])
+	case "context":
+		return cmdContext(out, errOut)
 	case "sync":
 		return cmdSync(out, errOut)
 	case "status":

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -55,6 +56,23 @@ func EmbeddedSkillRepos(v *Vault) ([]string, error) {
 		}
 	}
 	return found, nil
+}
+
+// RecentSubjects returns the subject line of each of the last n
+// commits, most recent first. It returns fewer than n lines when the
+// history holds fewer commits than that.
+func RecentSubjects(v *Vault, n int) ([]string, error) {
+	out, err := git(v, "log", "--format=%s", "-n", strconv.Itoa(n))
+	if err != nil {
+		return nil, err
+	}
+	var subjects []string
+	for _, line := range strings.Split(out, "\n") {
+		if line != "" {
+			subjects = append(subjects, line)
+		}
+	}
+	return subjects, nil
 }
 
 // Snapshot records the vault state in history. It does nothing when

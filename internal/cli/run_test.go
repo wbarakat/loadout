@@ -486,6 +486,121 @@ func TestEditRequiresAnAddress(t *testing.T) {
 	}
 }
 
+func writeDeployChecksAndMyStack(t *testing.T, base string) {
+	t.Helper()
+	skillPath := filepath.Join(base, "vault", "skills", "deploy-checks", "SKILL.md")
+	skillContent := "---\nname: deploy-checks\ndescription: run checks before a deploy\n---\n\nDo the thing.\n"
+	if err := os.WriteFile(skillPath, []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	factPath := filepath.Join(base, "vault", "memory", "my-stack.md")
+	factContent := "---\nname: my-stack\ndescription: the stack I use\n---\n\nI use Go and Postgres.\n"
+	if err := os.WriteFile(factPath, []byte(factContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecallFindsFactByBodyWord(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+	writeDeployChecksAndMyStack(t, base)
+
+	out, errOut, code := run(t, "recall", "postgres")
+	if code != 0 {
+		t.Fatalf("recall failed: %s", errOut)
+	}
+	if strings.TrimRight(out, "\n") != "memory/my-stack — the stack I use" {
+		t.Fatalf("bad output: %q", out)
+	}
+}
+
+func TestRecallFindsSkillByName(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+	writeDeployChecksAndMyStack(t, base)
+
+	out, errOut, code := run(t, "recall", "deploy-checks")
+	if code != 0 {
+		t.Fatalf("recall failed: %s", errOut)
+	}
+	if strings.TrimRight(out, "\n") != "skill/deploy-checks — run checks before a deploy" {
+		t.Fatalf("bad output: %q", out)
+	}
+}
+
+func TestRecallMatchesEveryTerm(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+	writeDeployChecksAndMyStack(t, base)
+
+	// "deploy" matches the skill; "postgres" matches only the fact.
+	// Both terms together must match nothing.
+	out, errOut, code := run(t, "recall", "deploy", "postgres")
+	if code != 0 {
+		t.Fatalf("recall failed: %s", errOut)
+	}
+	if out != "no items match. Fix: run loadout list to see every item.\n" {
+		t.Fatalf("bad output: %q", out)
+	}
+}
+
+func TestRecallNoMatchPrintsFixedMessage(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "my-stack")
+
+	out, errOut, code := run(t, "recall", "bogusterm")
+	if code != 0 {
+		t.Fatalf("recall failed: %s", errOut)
+	}
+	if out != "no items match. Fix: run loadout list to see every item.\n" {
+		t.Fatalf("bad output: %q", out)
+	}
+}
+
+func TestRecallRequiresATerm(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	if _, errOut, code := run(t, "recall"); code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("recall without a term must be a usage error, got %d %q", code, errOut)
+	}
+}
+
+func TestContextPrintsCompactPicture(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+	writeDeployChecksAndMyStack(t, base)
+
+	out, errOut, code := run(t, "context")
+	if code != 0 {
+		t.Fatalf("context failed: %s", errOut)
+	}
+	vaultRoot := filepath.Join(base, "vault")
+	if !strings.Contains(out, "vault: "+vaultRoot+" (1 skills, 1 facts)") {
+		t.Fatalf("missing counts line: %q", out)
+	}
+	if !strings.Contains(out, "the stack I use") {
+		t.Fatalf("missing memory hook: %q", out)
+	}
+	if !strings.Contains(out, "run checks before a deploy") {
+		t.Fatalf("missing skill hook: %q", out)
+	}
+	if !strings.Contains(out, "add memory my-stack") {
+		t.Fatalf("missing a known history subject: %q", out)
+	}
+	if !strings.HasSuffix(out, "next: loadout show <kind/name> reads one item; loadout recall <terms> searches.\n") {
+		t.Fatalf("bad next line: %q", out)
+	}
+}
+
 func TestDoctorReportsMissingHistory(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")

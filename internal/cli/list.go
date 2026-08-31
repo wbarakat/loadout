@@ -39,12 +39,26 @@ func cmdList(out, errOut io.Writer) int {
 	for _, f := range facts {
 		items = append(items, listItem{kind: "memory", name: f.Name, hook: f.Description})
 	}
+	sortItems(items)
+	printItems(out, items)
+	return 0
+}
+
+// sortItems orders items kind then name, the order "loadout list" and
+// "loadout recall" both use.
+func sortItems(items []listItem) {
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].kind != items[j].kind {
 			return items[i].kind < items[j].kind
 		}
 		return items[i].name < items[j].name
 	})
+}
+
+// printItems writes one line per item: "<kind>/<name> — <hook>". A
+// blank hook becomes "(no description)". Both "loadout list" and
+// "loadout recall" use this, so their output lines match exactly.
+func printItems(out io.Writer, items []listItem) {
 	for _, it := range items {
 		hook := it.hook
 		if hook == "" {
@@ -52,5 +66,4 @@ func cmdList(out, errOut io.Writer) int {
 		}
 		fmt.Fprintf(out, "%s/%s — %s\n", it.kind, it.name, hook)
 	}
-	return 0
 }
