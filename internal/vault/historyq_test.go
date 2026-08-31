@@ -121,3 +121,43 @@ func TestUndoRemovesLastFactKeepsEarlierState(t *testing.T) {
 		t.Fatalf("history must gain an undo entry on top of the earlier ones, got %v", entries)
 	}
 }
+
+// TestUndoKeepsUntrackedFileInEmptiedDir checks the case where undo
+// must remove a tracked file from a directory that also holds an
+// untracked file. Init is state A. Adding a skill is state B, its own
+// folder under skills/. An untracked file lands in that same folder
+// after state B, so it was never part of any commit. Undo must remove
+// the tracked SKILL.md, but it must neither destroy nor strand the
+// untracked file: read-tree only ever acts on tracked index entries,
+// so a directory git wants gone but that still holds an untracked
+// file must survive, with that file still in it.
+func TestUndoKeepsUntrackedFileInEmptiedDir(t *testing.T) {
+	v := newVault(t) // state A: init the vault
+	if _, err := vault.AddSkill(v, "deploy-checks", "human"); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Snapshot(v, "add skill deploy-checks"); err != nil {
+		t.Fatal(err)
+	} // state B: the skill folder is tracked
+
+	skillDir := filepath.Join(v.SkillsDir(), "deploy-checks")
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	untracked := filepath.Join(skillDir, "notes.txt")
+	if err := os.WriteFile(untracked, []byte("scratch notes, never committed"), 0o644); err != nil {
+		t.Fatal(err)
+	} // untracked: written after state B, no further snapshot
+
+	if err := vault.Undo(v); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(skillFile); !os.IsNotExist(err) {
+		t.Fatal("the tracked SKILL.md must be gone after undo")
+	}
+	if _, err := os.Stat(untracked); err != nil {
+		t.Fatalf("the untracked file must survive undo in place: %v", err)
+	}
+	if fi, err := os.Stat(skillDir); err != nil || !fi.IsDir() {
+		t.Fatalf("the skill folder must still exist, since the untracked file is still inside: %v", err)
+	}
+}
