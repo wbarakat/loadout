@@ -30,6 +30,9 @@ func (a Pi) Apply(v *vault.Vault, dry bool) (Report, error) {
 	memoryFile := vault.ExpandPath(a.Cfg.MemoryFile)
 	content := vault.RenderMemory(facts)
 	if dry {
+		if err := checkManagedBlockDamage(memoryFile); err != nil {
+			return report, err
+		}
 		report.Applied = append(report.Applied, managedBlockDryMsg(memoryFile, strings.TrimSpace(content)))
 	} else {
 		if err := WriteManagedBlock(memoryFile, content); err != nil {

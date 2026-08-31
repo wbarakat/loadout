@@ -262,6 +262,39 @@ func TestSyncDryRunReportsBlockedPathAndExitsZero(t *testing.T) {
 	}
 }
 
+func TestSyncDryRunReportsDamagedMarksAndExitsOne(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+
+	home := filepath.Join(base, "home")
+	claudeMd := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(claudeMd), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Two begin marks: damaged, the same way WriteManagedBlock refuses
+	// to touch it on a real sync.
+	corrupted := "<!-- loadout:begin -->\na\n<!-- loadout:begin -->\nb\n<!-- loadout:end -->\n"
+	if err := os.WriteFile(claudeMd, []byte(corrupted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := run(t, "sync", "--dry-run")
+	if code != 1 {
+		t.Fatalf("sync --dry-run on a damaged file must exit 1, got %d (out=%q err=%q)", code, out, errOut)
+	}
+	if !strings.Contains(errOut, claudeMd) || !strings.Contains(errOut, "damaged") {
+		t.Fatalf("errOut must name the damaged file, got %q", errOut)
+	}
+	data, err := os.ReadFile(claudeMd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != corrupted {
+		t.Fatal("a dry run must not touch a damaged file, even a byte")
+	}
+}
+
 func TestSyncDryRunFlagAcceptedInAnyPosition(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")

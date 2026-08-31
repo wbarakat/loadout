@@ -55,6 +55,9 @@ func (a AgentsMD) Apply(v *vault.Vault, dry bool) (Report, error) {
 	for _, target := range a.Cfg.Targets {
 		path := vault.ExpandPath(target)
 		if dry {
+			if err := checkManagedBlockDamage(path); err != nil {
+				return report, err
+			}
 			report.Applied = append(report.Applied, managedBlockDryMsg(path, trimmed))
 			continue
 		}

@@ -35,6 +35,9 @@ func (a ClaudeCode) Apply(v *vault.Vault, dry bool) (Report, error) {
 	renderPath := filepath.Join(v.RenderDir(), "memory.md")
 	memoryFile := vault.ExpandPath(a.Cfg.MemoryFile)
 	if dry {
+		if err := checkManagedBlockDamage(memoryFile); err != nil {
+			return report, err
+		}
 		report.Applied = append(report.Applied, managedBlockDryMsg(memoryFile, a.memoryImport(v)))
 	} else {
 		if err := writeFileAtomic(renderPath, []byte(vault.RenderMemory(facts))); err != nil {

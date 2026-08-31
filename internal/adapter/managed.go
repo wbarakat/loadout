@@ -25,6 +25,9 @@ func WriteManagedBlock(path, content string) error {
 	if strings.Contains(trimmed, beginMark) || strings.Contains(trimmed, endMark) {
 		return fmt.Errorf("the content for %s holds a loadout mark: remove the mark text from the source item", path)
 	}
+	if err := checkManagedBlockDamage(path); err != nil {
+		return err
+	}
 	block := beginMark + "\n" + trimmed + "\n" + endMark
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -59,7 +62,38 @@ func WriteManagedBlock(path, content string) error {
 		}
 	}
 
-	// Damaged marks: return error without writing.
+	// Damaged marks: return error without writing. In practice
+	// checkManagedBlockDamage above already caught this; this stays as
+	// a defensive fallback so a race between the two reads still fails
+	// safely instead of writing over a damaged file.
+	return fmt.Errorf("the loadout marks in %s are damaged: repair or remove them", path)
+}
+
+// checkManagedBlockDamage reads the file at path and reports whether
+// its loadout marks are damaged: any count of begin and end marks
+// other than zero of each, or exactly one of each with the begin mark
+// before the end mark. A missing file is not damaged, and returns
+// nil. WriteManagedBlock calls this before it writes; each adapter's
+// dry run calls it before it decides whether the block would change,
+// so a dry run fails the same way a real sync would on a corrupted
+// file.
+func checkManagedBlockDamage(path string) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	text := string(data)
+	beginCount := strings.Count(text, beginMark)
+	endCount := strings.Count(text, endMark)
+	if beginCount == 0 && endCount == 0 {
+		return nil
+	}
+	if beginCount == 1 && endCount == 1 && strings.Index(text, beginMark) < strings.Index(text, endMark) {
+		return nil
+	}
 	return fmt.Errorf("the loadout marks in %s are damaged: repair or remove them", path)
 }
 
@@ -95,7 +129,11 @@ func writeFileAtomic(path string, data []byte) error {
 // managedBlockDryMsg reports what a dry run would do to the managed
 // block at path, without writing anything: "memory: up to date" when
 // the block already holds want, "memory: block would change"
-// otherwise (including when the block or the file is missing).
+// otherwise (including when the block or the file is missing). The
+// caller must call checkManagedBlockDamage on path first and return
+// its error if not nil: managedBlockDryMsg does not check for damaged
+// marks itself, and would call a damaged file "would change" instead
+// of reporting the damage.
 func managedBlockDryMsg(path, want string) string {
 	got, ok := ReadManagedBlock(path)
 	if ok && got == want {
