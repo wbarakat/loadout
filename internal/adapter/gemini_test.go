@@ -195,7 +195,7 @@ func TestEnabledPinsFullRegistryOrder(t *testing.T) {
 	v := testVault(t)
 	home := t.TempDir()
 
-	// Enable all six adapters in the manifest.
+	// Enable all seven adapters in the manifest.
 	v.Manifest.Adapters["claude-code"] = vault.AdapterConfig{
 		Enabled:    true,
 		SkillsDir:  filepath.Join(home, ".claude", "skills"),
@@ -220,17 +220,21 @@ func TestEnabledPinsFullRegistryOrder(t *testing.T) {
 		Enabled:   true,
 		SkillsDir: filepath.Join(home, ".cursor", "skills"),
 	}
+	v.Manifest.Adapters["hermes"] = vault.AdapterConfig{
+		Enabled:   true,
+		SkillsDir: filepath.Join(home, ".hermes", "skills"),
+	}
 	v.Manifest.Adapters["agents-md"] = vault.AdapterConfig{
 		Enabled: true,
 		Targets: []string{filepath.Join(home, "agents.md")},
 	}
 
 	got := adapter.Enabled(v)
-	if len(got) != 6 {
-		t.Fatalf("Enabled must return all six adapters, got %d", len(got))
+	if len(got) != 7 {
+		t.Fatalf("Enabled must return all seven adapters, got %d", len(got))
 	}
 
-	expectedOrder := []string{"claude-code", "pi", "codex", "gemini", "cursor", "agents-md"}
+	expectedOrder := []string{"claude-code", "pi", "codex", "gemini", "cursor", "hermes", "agents-md"}
 	for i, a := range got {
 		if a.Name() != expectedOrder[i] {
 			t.Fatalf("adapter at index %d: expected %q, got %q", i, expectedOrder[i], a.Name())
