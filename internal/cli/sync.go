@@ -6,14 +6,24 @@ import (
 	"strings"
 
 	"loadout.dev/loadout/internal/adapter"
+	"loadout.dev/loadout/internal/remote"
 	"loadout.dev/loadout/internal/vault"
 )
 
+// syncRemoteResult is the JSON shape of "loadout sync --remote"'s
+// remote outcome.
+type syncRemoteResult struct {
+	Version string `json:"version"`
+	Pushed  bool   `json:"pushed"`
+	Merged  bool   `json:"merged"`
+}
+
 // syncResult is the JSON shape of "loadout sync".
 type syncResult struct {
-	Reports  []adapter.Report `json:"reports"`
-	Snapshot bool             `json:"snapshot"`
-	DryRun   bool             `json:"dry_run,omitempty"`
+	Reports  []adapter.Report  `json:"reports"`
+	Snapshot bool              `json:"snapshot"`
+	DryRun   bool              `json:"dry_run,omitempty"`
+	Remote   *syncRemoteResult `json:"remote,omitempty"`
 }
 
 // extractDryRun removes the first "--dry-run" argument found at any
@@ -32,8 +42,23 @@ func extractDryRun(args []string) ([]string, bool) {
 	return args, false
 }
 
+// extractRemoteFlag removes the first "--remote" argument found at
+// any position in args, and reports whether it found one.
+func extractRemoteFlag(args []string) ([]string, bool) {
+	for i, a := range args {
+		if a == "--remote" {
+			out := make([]string, 0, len(args)-1)
+			out = append(out, args[:i]...)
+			out = append(out, args[i+1:]...)
+			return out, true
+		}
+	}
+	return args, false
+}
+
 func cmdSync(out, errOut io.Writer, args []string, m mode) int {
 	rest, dry := extractDryRun(args)
+	rest, wantRemote := extractRemoteFlag(rest)
 	if len(rest) > 0 {
 		fmt.Fprint(errOut, usage)
 		return 2
@@ -44,12 +69,50 @@ func cmdSync(out, errOut io.Writer, args []string, m mode) int {
 		return 1
 	}
 	printWarnings(errOut, v)
-	release, err := vault.Lock(v)
+
+	reports, problem, err := syncLocal(v, out, errOut, dry, m)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+
+	var remoteResult *syncRemoteResult
+	// A dry run stays a preview: --remote never pushes, pulls, or
+	// merges anything while --dry-run is also set.
+	if wantRemote && !dry {
+		res, err := remote.Sync(v)
+		if err != nil {
+			fmt.Fprintln(errOut, err)
+			return 1
+		}
+		remoteResult = &syncRemoteResult{Version: res.Version, Pushed: res.Pushed, Merged: res.Merged}
+		if m != modeJSON {
+			fmt.Fprintf(out, "synced with the remote (version %s)\n", res.Version)
+		}
+	}
+
+	if m == modeJSON {
+		printJSON(out, syncResult{Reports: reports, Snapshot: !dry, DryRun: dry, Remote: remoteResult})
+	}
+	if problem {
+		return 1
+	}
+	return 0
+}
+
+// syncLocal projects the vault into every enabled adapter, under the
+// vault lock, releasing that lock before it returns. remote.Sync
+// takes the same lock itself, so cmdSync must never still hold this
+// one when it calls remote.Sync: two flock acquisitions from the same
+// process on the same file never share ownership, and the second
+// would simply wait out its own first holder until it times out.
+func syncLocal(v *vault.Vault, out, errOut io.Writer, dry bool, m mode) ([]adapter.Report, bool, error) {
+	release, err := vault.Lock(v)
+	if err != nil {
+		return nil, false, err
+	}
 	defer release()
+
 	problem := false
 	reports := []adapter.Report{}
 	for _, a := range adapter.Enabled(v) {
@@ -84,17 +147,10 @@ func cmdSync(out, errOut io.Writer, args []string, m mode) int {
 	}
 	if !dry {
 		if err := vault.Snapshot(v, "sync"); err != nil {
-			fmt.Fprintln(errOut, err)
-			return 1
+			return reports, problem, err
 		}
 	}
-	if m == modeJSON {
-		printJSON(out, syncResult{Reports: reports, Snapshot: !dry, DryRun: dry})
-	}
-	if problem {
-		return 1
-	}
-	return 0
+	return reports, problem, nil
 }
 
 // memoryStatus finds the one applied entry that reports the memory

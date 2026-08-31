@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"loadout.dev/loadout/internal/adapter"
+	"loadout.dev/loadout/internal/remote"
 	"loadout.dev/loadout/internal/vault"
 )
 
@@ -68,6 +69,14 @@ func cmdDoctor(out, errOut io.Writer, m mode) int {
 		for _, p := range a.Check(v) {
 			problems = append(problems, doctorProblem{Source: p.Adapter, Detail: p.Detail, Fix: p.Fix})
 		}
+	}
+	remoteStatus, hasRemote, err := remote.LoadStatus(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	if hasRemote && remoteStatus.State != "in sync" {
+		problems = append(problems, doctorRemoteProblem(remoteStatus))
 	}
 	count := len(problems)
 	if m == modeJSON {

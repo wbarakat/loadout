@@ -18,7 +18,9 @@ commands:
   recall TERM...             find items matching every term
   context                    show the compact picture of the vault
   device                     show this device's name and age recipient
-  sync [--dry-run]           project the vault into every enabled tool
+  remote                     show the configured remote and last synced version
+  remote add URL TOKEN       configure the remote to sync with
+  sync [--dry-run] [--remote] project the vault into every enabled tool, and sync
   status                     show the vault and the adapter state
   doctor                     find problems and show the fix for each one
   log                        show the vault history
@@ -85,6 +87,8 @@ func Run(out, errOut io.Writer, args []string) int {
 			return 2
 		}
 		return cmdDevice(out, errOut, m)
+	case "remote":
+		return cmdRemote(out, errOut, args[1:], m)
 	case "sync":
 		return cmdSync(out, errOut, args[1:], m)
 	case "status":
