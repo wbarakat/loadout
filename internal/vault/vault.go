@@ -177,9 +177,24 @@ func Open(root string) (*Vault, error) {
 // vault whose history is missing, leaving that vault's own error path
 // (noHistoryErr, raised later by log, context, and undo) intact
 // instead of failing here on the tracking probe.
+//
+// It also does nothing while an embedded skill repository is present:
+// Snapshot refuses to run there, and this heal would otherwise untrack
+// the file with no commit to show for it. Skipping leaves loadout.toml
+// tracked, so the next Open retries once the user removes the embedded
+// .git (doctor already tells them how).
+//
+// If Snapshot itself fails after a successful untrack — an embedded
+// repo that appears mid-heal, or an index-lock race — the split is
+// not lost: git rm --cached already staged the deletion, so the next
+// Snapshot any verb runs commits it. Only the "split the manifest"
+// marker message is best-effort; the untracking is not.
 func healTrackedManifest(v *Vault) {
 	out, err := git(v, "ls-files", "loadout.toml")
 	if err != nil || strings.TrimSpace(out) == "" {
+		return
+	}
+	if repos, err := EmbeddedSkillRepos(v); err != nil || len(repos) > 0 {
 		return
 	}
 	if _, err := git(v, "rm", "--cached", "--quiet", "loadout.toml"); err != nil {

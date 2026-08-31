@@ -1,6 +1,7 @@
 package vault_test
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -122,6 +123,44 @@ func TestOpenMigrationSkipsVaultWithNoHistory(t *testing.T) {
 	}
 	if _, err := vault.Open(root); err != nil {
 		t.Fatalf("Open must not fail when history is missing: %v", err)
+	}
+}
+
+// TestOpenSkipsMigrationWithEmbeddedSkillRepo proves the heal defers
+// to Snapshot's own refusal: with an embedded skill repository
+// present, Open leaves loadout.toml tracked rather than untracking it
+// with no commit to record. Once the embedded repo is gone, the next
+// Open migrates normally.
+func TestOpenSkipsMigrationWithEmbeddedSkillRepo(t *testing.T) {
+	root := legacyVault(t)
+	embeddedGit := filepath.Join(root, "skills", "deploy-checks", ".git")
+	if err := os.MkdirAll(embeddedGit, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := vault.Open(root); err != nil {
+		t.Fatal(err)
+	}
+	if out := runGitIn(t, root, "ls-files", "loadout.toml"); strings.TrimSpace(out) == "" {
+		t.Fatal("Open must not untrack loadout.toml while an embedded skill repo is present")
+	}
+
+	if err := os.RemoveAll(filepath.Dir(embeddedGit)); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := runGitIn(t, root, "ls-files", "loadout.toml"); strings.TrimSpace(out) != "" {
+		t.Fatal("Open must migrate once the embedded skill repo is gone")
+	}
+	entries, err := vault.History(v, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 || entries[0].Subject != "split the manifest" {
+		t.Fatalf("History must show the split commit, got %v", entries)
 	}
 }
 
