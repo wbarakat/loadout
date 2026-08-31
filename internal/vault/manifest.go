@@ -27,7 +27,7 @@ func DefaultManifest() Manifest {
 		Version: 1,
 		Adapters: map[string]AdapterConfig{
 			"claude-code": {Enabled: true, SkillsDir: "~/.claude/skills", MemoryFile: "~/.claude/CLAUDE.md"},
-			"pi":          {Enabled: true, SkillsDir: "~/.pi/agent/skills", MemoryFile: "~/.pi/AGENTS.md"},
+			"pi":          {Enabled: true, SkillsDir: "~/.pi/agent/skills", MemoryFile: "~/.pi/agent/AGENTS.md"},
 			"agents-md":   {Enabled: false},
 		},
 	}

@@ -1,0 +1,56 @@
+package adapter
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+
+	"loadout.dev/loadout/internal/vault"
+)
+
+// Pi projects the vault into pi: skills as symlinks, memory as a
+// managed block with the full rendered content.
+type Pi struct {
+	Cfg vault.AdapterConfig
+}
+
+func (a Pi) Name() string { return "pi" }
+
+func (a Pi) Apply(v *vault.Vault) error {
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		return err
+	}
+	if _, err := LinkSkills(skills, vault.ExpandPath(a.Cfg.SkillsDir)); err != nil {
+		return err
+	}
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		return err
+	}
+	return WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), vault.RenderMemory(facts))
+}
+
+func (a Pi) Check(v *vault.Vault) []Problem {
+	var ps []Problem
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		return []Problem{{a.Name(), err.Error(), "repair the vault skills directory"}}
+	}
+	dir := vault.ExpandPath(a.Cfg.SkillsDir)
+	for _, s := range skills {
+		cur, err := os.Readlink(filepath.Join(dir, s.Name))
+		if err != nil || cur != s.Dir {
+			ps = append(ps, Problem{a.Name(), "the skill " + s.Name + " is not linked", "run: loadout sync"})
+		}
+	}
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		return append(ps, Problem{a.Name(), err.Error(), "repair the vault memory directory"})
+	}
+	got, ok := ReadManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile))
+	if !ok || got != strings.TrimSpace(vault.RenderMemory(facts)) {
+		ps = append(ps, Problem{a.Name(), "the memory block is missing or stale", "run: loadout sync"})
+	}
+	return ps
+}
