@@ -88,3 +88,34 @@ func TestSyncProjectsVault(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusAndDoctor(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+
+	// Before sync: doctor must report problems and exit 1.
+	out, _, code := run(t, "doctor")
+	if code != 1 || !strings.Contains(out, "loadout sync") {
+		t.Fatalf("doctor before sync: code=%d out=%q", code, out)
+	}
+
+	run(t, "sync")
+
+	out, _, code = run(t, "status")
+	if code != 0 {
+		t.Fatal("status failed")
+	}
+	if !strings.Contains(out, "skills: 1") || !strings.Contains(out, "memory facts: 1") {
+		t.Fatalf("bad status: %q", out)
+	}
+	if !strings.Contains(out, "claude-code: in sync") || !strings.Contains(out, "pi: in sync") {
+		t.Fatalf("bad adapter status: %q", out)
+	}
+
+	out, _, code = run(t, "doctor")
+	if code != 0 || !strings.Contains(out, "all good") {
+		t.Fatalf("doctor after sync: code=%d out=%q", code, out)
+	}
+}
