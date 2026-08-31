@@ -21,8 +21,9 @@ commands:
   remote                     show the configured remote and last synced version
   remote add URL TOKEN       configure the remote to sync with
   join URL TOKEN             enroll this device with a remote, waiting for approval
-  devices [--json]           show every device: approved or waiting
+  devices [--json]           show every device: approved, waiting, or re-keyed
   devices approve NAME       approve a waiting device
+  devices approve NAME --rotate  trust a re-keyed device's new key
   sync [--dry-run] [--remote] project the vault into every enabled tool, and sync
   status                     show the vault and the adapter state
   doctor                     find problems and show the fix for each one

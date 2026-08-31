@@ -35,7 +35,7 @@ func TestClientRegisterDeviceIsIdempotent(t *testing.T) {
 	ts, token := newTestServer(t)
 	c := remote.NewClient(ts.URL, token)
 	for i := 0; i < 2; i++ {
-		if err := c.RegisterDevice("laptop", "age1abc"); err != nil {
+		if err := c.RegisterDevice("laptop", "age1fla00xc80e2tg3dq6x7wj9mkksj3p46ahu5jxjklxapxc2xryv7smtwcf9"); err != nil {
 			t.Fatalf("RegisterDevice %d failed: %v", i, err)
 		}
 	}

@@ -91,7 +91,7 @@ func TestProtectedRouteRejectsMissingOrWrongToken(t *testing.T) {
 
 func TestDeviceUpsertIsIdempotentOverHTTP(t *testing.T) {
 	ts, token := newTestServer(t)
-	body := `{"name":"laptop","recipient":"age1abc"}`
+	body := `{"name":"laptop","recipient":"age1fla00xc80e2tg3dq6x7wj9mkksj3p46ahu5jxjklxapxc2xryv7smtwcf9"}`
 
 	for i := 0; i < 2; i++ {
 		resp := doReq(t, http.MethodPost, ts.URL+"/v1/devices", token, bytes.NewBufferString(body), nil)
@@ -111,6 +111,45 @@ func TestDeviceUpsertIsIdempotentOverHTTP(t *testing.T) {
 	}
 	if len(listed.Devices) != 1 {
 		t.Fatalf("expected exactly one device after two upserts, got %d", len(listed.Devices))
+	}
+}
+
+// TestDeviceUpsertRejectsInvalidRecipient reproduces the live-repro
+// review's enrollment DoS at the source: a raw POST (no loadout
+// client involved, exactly a curl attacker) carrying a recipient that
+// is not shaped like a valid age X25519 recipient must be refused
+// with 400, and the garbage entry must never reach the roster —
+// otherwise a routine "devices approve" of that name would later
+// brick PackSnapshot for every device.
+func TestDeviceUpsertRejectsInvalidRecipient(t *testing.T) {
+	ts, token := newTestServer(t)
+
+	for _, recipient := range []string{
+		"not-an-age-recipient",
+		"age1abc",
+		"",
+	} {
+		body, err := json.Marshal(map[string]string{"name": "evil", "recipient": recipient})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := doReq(t, http.MethodPost, ts.URL+"/v1/devices", token, bytes.NewReader(body), nil)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("recipient %q: expected 400, got %d", recipient, resp.StatusCode)
+		}
+	}
+
+	resp := doReq(t, http.MethodGet, ts.URL+"/v1/devices", token, nil, nil)
+	defer resp.Body.Close()
+	var listed struct {
+		Devices []Device `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Devices) != 0 {
+		t.Fatalf("a rejected upsert must never reach the roster, got %+v", listed.Devices)
 	}
 }
 
@@ -365,7 +404,7 @@ func TestServerNeverLogsTokenOrBlob(t *testing.T) {
 
 	blobMarker := fmt.Sprintf("SECRET-BLOB-MARKER-%d", time.Now().UnixNano())
 
-	devResp := doReq(t, http.MethodPost, ts.URL+"/v1/devices", token, bytes.NewBufferString(`{"name":"laptop","recipient":"age1abc"}`), nil)
+	devResp := doReq(t, http.MethodPost, ts.URL+"/v1/devices", token, bytes.NewBufferString(`{"name":"laptop","recipient":"age1fla00xc80e2tg3dq6x7wj9mkksj3p46ahu5jxjklxapxc2xryv7smtwcf9"}`), nil)
 	devResp.Body.Close()
 
 	postResp := doReq(t, http.MethodPost, ts.URL+"/v1/snapshots", token, bytes.NewBufferString(blobMarker), map[string]string{"X-Loadout-Parent": ""})

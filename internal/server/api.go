@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -85,10 +86,39 @@ type deviceRequest struct {
 	Recipient string `json:"recipient"`
 }
 
+// ageX25519RecipientPattern matches the shape every age X25519
+// recipient string has: the bech32 human-readable part "age1",
+// followed by exactly 58 characters from bech32's own 32-character
+// data alphabet — the length and alphabet age.GenerateX25519Identity
+// always produces (invariant: recipient strings are always exactly
+// 62 characters).
+//
+// This checks shape only, not the bech32 checksum: TestServerPackage-
+// NeverImportsAge fixes invariant 8 at the dependency level — the
+// server package may never import filippo.io/age, so it can never
+// gain a path to age.Decrypt, even by an accidental future edit — so
+// this handler cannot call the real age.ParseX25519Recipient the way
+// devices approve's own validation does. That real, authoritative
+// validation is Layer 1 (internal/cli/devices.go's approveDevice);
+// this regexp is Layer 2, a shape-only defense-in-depth check that
+// refuses the obviously-garbage recipient an enrollment DoS depends
+// on, without weakening invariant 8.
+var ageX25519RecipientPattern = regexp.MustCompile(`^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$`)
+
 func (s *Server) handleUpsertDevice(w http.ResponseWriter, r *http.Request) {
 	var req deviceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Recipient == "" {
 		writeJSONError(w, http.StatusBadRequest, "name and recipient are required")
+		s.log(r, http.StatusBadRequest, "", 0)
+		return
+	}
+	// Reject a recipient that is not shaped like a valid age X25519
+	// recipient before it ever reaches the roster: this is the
+	// roster's first line of defense against a garbage or malicious
+	// registration — approving it later would encrypt every future
+	// snapshot, on every device, to a key nobody holds.
+	if !ageX25519RecipientPattern.MatchString(req.Recipient) {
+		writeJSONError(w, http.StatusBadRequest, "recipient is not a valid age X25519 recipient")
 		s.log(r, http.StatusBadRequest, "", 0)
 		return
 	}
