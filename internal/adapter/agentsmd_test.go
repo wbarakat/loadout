@@ -15,7 +15,7 @@ func TestAgentsMDApply(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "proj", "AGENTS.md")
 	a := adapter.AgentsMD{Cfg: vault.AdapterConfig{Enabled: true, Targets: []string{target}}}
 
-	if err := a.Apply(v); err != nil {
+	if _, err := a.Apply(v, false); err != nil {
 		t.Fatal(err)
 	}
 	block, ok := adapter.ReadManagedBlock(target)
@@ -41,7 +41,7 @@ func TestAgentsMDApplyRefusesFactWithMark(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "proj", "AGENTS.md")
 	a := adapter.AgentsMD{Cfg: vault.AdapterConfig{Enabled: true, Targets: []string{target}}}
 
-	err := a.Apply(v)
+	_, err := a.Apply(v, false)
 	if err == nil || !strings.Contains(err.Error(), "memory/stack") {
 		t.Fatalf("Apply must name the offending fact, got %v", err)
 	}

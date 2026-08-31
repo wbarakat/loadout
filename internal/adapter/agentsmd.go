@@ -34,28 +34,32 @@ func renderAgentsMD(v *vault.Vault) (string, error) {
 	return b.String(), nil
 }
 
-func (a AgentsMD) Apply(v *vault.Vault) error {
+func (a AgentsMD) Apply(v *vault.Vault, dry bool) (Report, error) {
+	report := Report{Adapter: a.Name(), DryRun: dry}
 	facts, err := vault.ListFacts(v)
 	if err != nil {
-		return err
+		return report, err
 	}
 	skills, err := vault.ListSkills(v)
 	if err != nil {
-		return err
+		return report, err
 	}
 	if err := scanForMarks(facts, skills); err != nil {
-		return err
+		return report, err
 	}
 	content, err := renderAgentsMD(v)
 	if err != nil {
-		return err
+		return report, err
 	}
 	for _, target := range a.Cfg.Targets {
-		if err := WriteManagedBlock(vault.ExpandPath(target), content); err != nil {
-			return err
+		if !dry {
+			if err := WriteManagedBlock(vault.ExpandPath(target), content); err != nil {
+				return report, err
+			}
 		}
+		report.Applied = append(report.Applied, "memory: block written")
 	}
-	return nil
+	return report, nil
 }
 
 func (a AgentsMD) Check(v *vault.Vault) []Problem {

@@ -14,20 +14,27 @@ func cmdSync(out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
-	failed := false
+	problem := false
 	for _, a := range adapter.Enabled(v) {
-		if err := a.Apply(v); err != nil {
+		report, err := a.Apply(v, false)
+		if err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", a.Name(), err)
-			failed = true
+			problem = true
 			continue
 		}
-		fmt.Fprintf(out, "synced %s\n", a.Name())
+		fmt.Fprintf(out, "synced %s (%d linked, %d pruned)\n", a.Name(), len(report.Applied), len(report.Pruned))
+		for _, b := range report.Blocked {
+			fmt.Fprintf(errOut, "%s: %s\n", a.Name(), b)
+		}
+		if len(report.Blocked) > 0 {
+			problem = true
+		}
 	}
 	if err := vault.Snapshot(v, "sync"); err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
-	if failed {
+	if problem {
 		return 1
 	}
 	return 0

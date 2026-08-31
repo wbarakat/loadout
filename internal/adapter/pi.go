@@ -14,30 +14,34 @@ type Pi struct {
 
 func (a Pi) Name() string { return "pi" }
 
-func (a Pi) Apply(v *vault.Vault) error {
+func (a Pi) Apply(v *vault.Vault, dry bool) (Report, error) {
+	report := Report{Adapter: a.Name(), DryRun: dry}
 	facts, err := vault.ListFacts(v)
 	if err != nil {
-		return err
+		return report, err
 	}
 	skills, err := vault.ListSkills(v)
 	if err != nil {
-		return err
+		return report, err
 	}
 	if err := scanForMarks(facts, skills); err != nil {
-		return err
+		return report, err
 	}
-	if err := WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), vault.RenderMemory(facts)); err != nil {
-		return err
+	if !dry {
+		if err := WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), vault.RenderMemory(facts)); err != nil {
+			return report, err
+		}
 	}
+	report.Applied = append(report.Applied, "memory: block written")
 	skillsDir := vault.ExpandPath(a.Cfg.SkillsDir)
-	blocked, err := LinkSkills(skills, v.SkillsDir(), skillsDir)
+	applied, pruned, blocked, err := LinkSkills(skills, v.SkillsDir(), skillsDir, dry)
 	if err != nil {
-		return err
+		return report, err
 	}
-	if len(blocked) > 0 {
-		return blockedSkillsError(blocked, skillsDir)
-	}
-	return nil
+	report.Applied = append(report.Applied, applied...)
+	report.Pruned = pruned
+	report.Blocked = blocked
+	return report, nil
 }
 
 func (a Pi) Check(v *vault.Vault) []Problem {

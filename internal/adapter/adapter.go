@@ -12,7 +12,7 @@ type Problem struct {
 // Adapter projects the vault into one tool.
 type Adapter interface {
 	Name() string
-	Apply(v *vault.Vault) error
+	Apply(v *vault.Vault, dry bool) (Report, error)
 	Check(v *vault.Vault) []Problem
 }
 

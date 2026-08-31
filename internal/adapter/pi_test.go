@@ -20,7 +20,7 @@ func TestPiApplyAndCheck(t *testing.T) {
 	}
 	a := adapter.Pi{Cfg: cfg}
 
-	if err := a.Apply(v); err != nil {
+	if _, err := a.Apply(v, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Readlink(filepath.Join(cfg.SkillsDir, "deploy-checks")); err != nil {
@@ -55,8 +55,11 @@ func TestPiApplyProjectsMemoryDespiteBlockedSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := a.Apply(v)
-	if err == nil {
+	report, err := a.Apply(v, false)
+	if err != nil {
+		t.Fatalf("Apply must not error on a blocked skill, got %v", err)
+	}
+	if len(report.Blocked) == 0 {
 		t.Fatal("Apply must still report the blocked skill")
 	}
 	block, ok := adapter.ReadManagedBlock(cfg.MemoryFile)
@@ -77,7 +80,7 @@ func TestPiApplyRefusesFactWithMark(t *testing.T) {
 	}
 	a := adapter.Pi{Cfg: cfg}
 
-	err := a.Apply(v)
+	_, err := a.Apply(v, false)
 	if err == nil || !strings.Contains(err.Error(), "memory/stack") {
 		t.Fatalf("Apply must name the offending fact, got %v", err)
 	}

@@ -1,7 +1,6 @@
 package adapter
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,15 +46,28 @@ func isVaultOwned(target, vaultSkillsDir string) bool {
 	return target == vaultSkillsDir || strings.HasPrefix(target, vaultSkillsDir+string(filepath.Separator))
 }
 
+// blockedLinkMsg names the skill and the path that blocks its link,
+// with the fix the user must run by hand.
+func blockedLinkMsg(name, path string) string {
+	return fmt.Sprintf("skill/%s: a real file or a foreign link occupies %s. Fix: move or remove %s.", name, path, path)
+}
+
 // LinkSkills creates one symlink per skill in dir, pointing into the
 // vault skills directory. It repairs a Loadout-owned link that has
 // the wrong target. It never replaces a real file, a real directory,
 // or a symlink that points outside the vault skills directory — it
-// reports those names as blocked. After linking, it removes every
-// Loadout-owned link in dir that no longer matches a listed skill.
-func LinkSkills(skills []vault.Skill, vaultSkillsDir, dir string) (blocked []string, err error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+// reports those names as blocked, not as an error. After linking, it
+// removes every Loadout-owned link in dir that no longer matches a
+// listed skill.
+//
+// If dry is true, LinkSkills changes nothing on disk. It still walks
+// the same decisions and returns the same applied, pruned, and
+// blocked lists it would return for a real run.
+func LinkSkills(skills []vault.Skill, vaultSkillsDir, dir string, dry bool) (applied, pruned, blocked []string, err error) {
+	if !dry {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	vaultSkillsDir = canonicalPath(vaultSkillsDir)
 	want := make(map[string]string, len(skills))
@@ -70,39 +82,56 @@ func LinkSkills(skills []vault.Skill, vaultSkillsDir, dir string) (blocked []str
 			cur, readErr := os.Readlink(linkPath)
 			if readErr != nil || !isVaultOwned(cur, vaultSkillsDir) {
 				// A foreign link: it is the user's. Leave it.
-				blocked = append(blocked, s.Name)
+				blocked = append(blocked, blockedLinkMsg(s.Name, linkPath))
 				continue
 			}
 			if canonicalPath(cur) == canonicalPath(s.Dir) {
 				continue
 			}
-			if err := os.Remove(linkPath); err != nil {
-				return blocked, err
+			if !dry {
+				if err := os.Remove(linkPath); err != nil {
+					return applied, pruned, blocked, err
+				}
 			}
 		case statErr == nil:
 			// A real file or directory: it is the user's. Leave it.
-			blocked = append(blocked, s.Name)
+			blocked = append(blocked, blockedLinkMsg(s.Name, linkPath))
 			continue
 		}
-		if err := os.Symlink(s.Dir, linkPath); err != nil {
-			return blocked, err
+		if !dry {
+			if err := os.Symlink(s.Dir, linkPath); err != nil {
+				return applied, pruned, blocked, err
+			}
 		}
+		applied = append(applied, fmt.Sprintf("skill/%s: linked", s.Name))
 	}
-	if err := pruneLinks(dir, vaultSkillsDir, want); err != nil {
-		return blocked, err
+	removed, err := pruneLinks(dir, vaultSkillsDir, want, dry)
+	if err != nil {
+		return applied, pruned, blocked, err
 	}
-	return blocked, nil
+	for _, name := range removed {
+		pruned = append(pruned, fmt.Sprintf("skill/%s: stale link removed", name))
+	}
+	return applied, pruned, blocked, nil
 }
 
 // pruneLinks removes every Loadout-owned symlink in dir that does not
-// match a wanted skill name with the correct target. It never removes
-// a real file, a real directory, or a symlink that points outside the
-// vault skills directory.
-func pruneLinks(dir, vaultSkillsDir string, want map[string]string) error {
+// match a wanted skill name with the correct target, and returns the
+// name of each skill it removed. It never removes a real file, a
+// real directory, or a symlink that points outside the vault skills
+// directory. If dry is true, it removes nothing and only reports what
+// it would remove.
+func pruneLinks(dir, vaultSkillsDir string, want map[string]string, dry bool) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		if dry && os.IsNotExist(err) {
+			// A dry run against a directory not yet created has
+			// nothing to prune.
+			return nil, nil
+		}
+		return nil, err
 	}
+	var pruned []string
 	for _, e := range entries {
 		info, err := e.Info()
 		if err != nil || info.Mode()&os.ModeSymlink == 0 {
@@ -116,22 +145,14 @@ func pruneLinks(dir, vaultSkillsDir string, want map[string]string) error {
 		if target, ok := want[e.Name()]; ok && canonicalPath(target) == canonicalPath(cur) {
 			continue
 		}
-		if err := os.Remove(path); err != nil {
-			return err
+		if !dry {
+			if err := os.Remove(path); err != nil {
+				return pruned, err
+			}
 		}
+		pruned = append(pruned, e.Name())
 	}
-	return nil
-}
-
-// blockedSkillsError builds one error naming every blocked skill and
-// the path that blocks it.
-func blockedSkillsError(names []string, dir string) error {
-	msgs := make([]string, len(names))
-	for i, name := range names {
-		path := filepath.Join(dir, name)
-		msgs[i] = fmt.Sprintf("the skill %s is blocked: a real file or a foreign link occupies %s; move or remove it. the link may point at another Loadout vault, or at this vault through a different path spelling.", name, path)
-	}
-	return errors.New(strings.Join(msgs, "\n"))
+	return pruned, nil
 }
 
 // checkLinks reports one problem for each skill that is not correctly

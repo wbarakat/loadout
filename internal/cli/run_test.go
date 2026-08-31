@@ -175,6 +175,32 @@ func TestSyncContinuesAfterAdapterFailure(t *testing.T) {
 	}
 }
 
+func TestSyncExitsOneOnBlocked(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+
+	home := filepath.Join(base, "home")
+	// A real directory occupies the pi skill link path, so the pi
+	// adapter must report the skill as blocked.
+	blockedPath := filepath.Join(home, ".pi", "agent", "skills", "deploy-checks")
+	if err := os.MkdirAll(blockedPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := run(t, "sync")
+	if code != 1 {
+		t.Fatalf("sync must exit 1 when a skill is blocked, got %d", code)
+	}
+	if !strings.Contains(errOut, blockedPath) {
+		t.Fatalf("errOut must name the blocked address, got %q", errOut)
+	}
+	if !strings.Contains(out, "synced pi") {
+		t.Fatalf("sync must still report the pi adapter as synced, got %q", out)
+	}
+}
+
 func TestStatusAndDoctor(t *testing.T) {
 	setupEnv(t)
 	run(t, "init")

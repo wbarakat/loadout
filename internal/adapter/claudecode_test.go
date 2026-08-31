@@ -43,7 +43,7 @@ func TestClaudeCodeApplyAndCheck(t *testing.T) {
 	if len(a.Check(v)) == 0 {
 		t.Fatal("check must report problems before apply")
 	}
-	if err := a.Apply(v); err != nil {
+	if _, err := a.Apply(v, false); err != nil {
 		t.Fatal(err)
 	}
 	// The skill is a symlink into the vault.
@@ -87,9 +87,21 @@ func TestClaudeCodeApplyReportsBlockedSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := a.Apply(v)
-	if err == nil || !strings.Contains(err.Error(), blockedPath) {
-		t.Fatalf("Apply must name the blocked path, got %v", err)
+	report, err := a.Apply(v, false)
+	if err != nil {
+		t.Fatalf("Apply must not error on a blocked skill, got %v", err)
+	}
+	if len(report.Blocked) != 1 || !strings.Contains(report.Blocked[0], blockedPath) {
+		t.Fatalf("Report.Blocked must name the blocked path, got %v", report.Blocked)
+	}
+	// The memory projection must still happen despite the blocked skill.
+	data, err := os.ReadFile(filepath.Join(v.RenderDir(), "memory.md"))
+	if err != nil || !strings.Contains(string(data), "I use Go.") {
+		t.Fatalf("bad render: %v", err)
+	}
+	block, ok := adapter.ReadManagedBlock(cfg.MemoryFile)
+	if !ok || block != "@"+filepath.Join(v.RenderDir(), "memory.md") {
+		t.Fatalf("bad block %q", block)
 	}
 
 	found := false
@@ -118,8 +130,11 @@ func TestClaudeCodeApplyProjectsMemoryDespiteBlockedSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := a.Apply(v)
-	if err == nil {
+	report, err := a.Apply(v, false)
+	if err != nil {
+		t.Fatalf("Apply must not error on a blocked skill, got %v", err)
+	}
+	if len(report.Blocked) == 0 {
 		t.Fatal("Apply must still report the blocked skill")
 	}
 	// One blocked skill must not stop the memory projection.
@@ -145,7 +160,7 @@ func TestClaudeCodeApplyRefusesFactWithMark(t *testing.T) {
 	}
 	a := adapter.ClaudeCode{Cfg: cfg}
 
-	err := a.Apply(v)
+	_, err := a.Apply(v, false)
 	if err == nil || !strings.Contains(err.Error(), "memory/stack") {
 		t.Fatalf("Apply must name the offending fact, got %v", err)
 	}

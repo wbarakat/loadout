@@ -34,7 +34,7 @@ func TestOwnershipSurvivesPathSpelling(t *testing.T) {
 		t.Fatal(err)
 	}
 	skills := []vault.Skill{{Name: "a", Dir: skillDir}}
-	if _, err := LinkSkills(skills, vaultSkillsDir, dst); err != nil {
+	if _, _, _, err := LinkSkills(skills, vaultSkillsDir, dst, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -44,7 +44,7 @@ func TestOwnershipSurvivesPathSpelling(t *testing.T) {
 	realDst := filepath.Join(realBase, "tool", "skills")
 	realSkills := []vault.Skill{{Name: "a", Dir: realSkillDir}}
 
-	blocked, err := LinkSkills(realSkills, realVaultSkillsDir, realDst)
+	_, _, blocked, err := LinkSkills(realSkills, realVaultSkillsDir, realDst, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestPruneRemovesStaleLinkThroughDanglingSpelling(t *testing.T) {
 	}
 
 	skills := []vault.Skill{{Name: "a", Dir: aDir}, {Name: "b", Dir: bDir}}
-	if _, err := LinkSkills(skills, vaultSkillsDir, dst); err != nil {
+	if _, _, _, err := LinkSkills(skills, vaultSkillsDir, dst, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,7 +104,7 @@ func TestPruneRemovesStaleLinkThroughDanglingSpelling(t *testing.T) {
 	}
 
 	// Re-run with only "b" listed, still addressed through the link.
-	if _, err := LinkSkills(skills[1:], vaultSkillsDir, dst); err != nil {
+	if _, _, _, err := LinkSkills(skills[1:], vaultSkillsDir, dst, false); err != nil {
 		t.Fatal(err)
 	}
 
