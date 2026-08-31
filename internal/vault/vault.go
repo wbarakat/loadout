@@ -20,6 +20,11 @@ func DefaultRoot() string {
 }
 
 func Init(root string) (*Vault, error) {
+	var err error
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(filepath.Join(root, "loadout.toml")); err == nil {
 		return nil, fmt.Errorf("a vault already exists at %s", root)
 	}
@@ -42,6 +47,11 @@ func Init(root string) (*Vault, error) {
 }
 
 func Open(root string) (*Vault, error) {
+	var absErr error
+	root, absErr = filepath.Abs(root)
+	if absErr != nil {
+		return nil, absErr
+	}
 	m, err := LoadManifest(filepath.Join(root, "loadout.toml"))
 	if err != nil {
 		return nil, fmt.Errorf("no vault at %s: run \"loadout init\" first", root)

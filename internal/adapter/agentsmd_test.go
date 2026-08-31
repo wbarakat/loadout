@@ -24,8 +24,9 @@ func TestAgentsMDApply(t *testing.T) {
 	if !strings.Contains(block, "I use Go.") {
 		t.Fatal("memory is missing from the block")
 	}
-	if !strings.Contains(block, "deploy-checks") || !strings.Contains(block, "SKILL.md") {
-		t.Fatal("the skills index is missing from the block")
+	want := filepath.Join(v.SkillsDir(), "deploy-checks", "SKILL.md")
+	if !strings.Contains(block, want) {
+		t.Fatalf("the block must hold the absolute skill path %s", want)
 	}
 	if ps := a.Check(v); len(ps) != 0 {
 		t.Fatalf("check must be clean after apply: %+v", ps)

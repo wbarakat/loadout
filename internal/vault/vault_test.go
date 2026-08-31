@@ -90,3 +90,22 @@ func TestInitCleansUpOnHistoryFailure(t *testing.T) {
 		t.Fatal("init should return vault when it succeeds")
 	}
 }
+
+func TestInitMakesRootAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(old)
+	v, err := vault.Init("relvault")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(v.Root) {
+		t.Fatalf("root must be absolute, got %q", v.Root)
+	}
+}
