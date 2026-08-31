@@ -20,6 +20,8 @@ commands:
   sync                       project the vault into every enabled tool
   status                     show the vault and the adapter state
   doctor                     find problems and show the fix for each one
+  log                        show the vault history
+  undo                       revert to the state before the last change
 `
 
 func Run(out, errOut io.Writer, args []string) int {
@@ -48,6 +50,10 @@ func Run(out, errOut io.Writer, args []string) int {
 		return cmdStatus(out, errOut)
 	case "doctor":
 		return cmdDoctor(out, errOut)
+	case "log":
+		return cmdLog(out, errOut)
+	case "undo":
+		return cmdUndo(out, errOut)
 	default:
 		fmt.Fprintf(errOut, "unknown command %q\n%s", args[0], usage)
 		return 2

@@ -601,6 +601,71 @@ func TestContextPrintsCompactPicture(t *testing.T) {
 	}
 }
 
+func TestLogShowsSubjectsNewestFirst(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "fact1")
+	run(t, "add", "memory", "fact2")
+
+	out, errOut, code := run(t, "log")
+	if code != 0 {
+		t.Fatalf("log failed: %s", errOut)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want 3 lines, got %q", out)
+	}
+	if !strings.HasSuffix(lines[0], "  add memory fact2") {
+		t.Fatalf("newest entry must come first, got %q", lines[0])
+	}
+	if !strings.HasSuffix(lines[1], "  add memory fact1") {
+		t.Fatalf("bad second entry, got %q", lines[1])
+	}
+	if !strings.HasSuffix(lines[2], "  init the vault") {
+		t.Fatalf("bad third entry, got %q", lines[2])
+	}
+}
+
+func TestUndoRestoresPreviousVaultState(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "fact1")
+	run(t, "add", "memory", "fact2")
+
+	out, errOut, code := run(t, "undo")
+	if code != 0 {
+		t.Fatalf("undo failed: %s", errOut)
+	}
+	if out != "restored the previous vault state\nnext: run loadout sync to project it\n" {
+		t.Fatalf("bad undo output: %q", out)
+	}
+
+	if _, err := os.Stat(filepath.Join(base, "vault", "memory", "fact2.md")); !os.IsNotExist(err) {
+		t.Fatal("the undone fact must be gone from disk")
+	}
+	if _, err := os.Stat(filepath.Join(base, "vault", "memory", "fact1.md")); err != nil {
+		t.Fatal("the first fact must survive undo")
+	}
+
+	logOut, _, _ := run(t, "log")
+	if !strings.Contains(logOut, "undo") {
+		t.Fatalf("log must gain an undo entry, got %q", logOut)
+	}
+}
+
+func TestUndoOnFreshVaultErrorsWithFixedMessage(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+
+	_, errOut, code := run(t, "undo")
+	if code != 1 {
+		t.Fatalf("undo on a fresh vault must exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut, "nothing to undo: the vault has no earlier state.") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+}
+
 func TestDoctorReportsMissingHistory(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")
