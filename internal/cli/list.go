@@ -1,0 +1,56 @@
+package cli
+
+import (
+	"fmt"
+	"io"
+	"sort"
+
+	"loadout.dev/loadout/internal/vault"
+)
+
+// listItem is one line of "loadout list" output.
+type listItem struct {
+	kind, name, hook string
+}
+
+// cmdList prints every item in the vault, kind then name order, one
+// line each: "<kind>/<name> — <hook>".
+func cmdList(out, errOut io.Writer) int {
+	v, err := vault.Open(vault.DefaultRoot())
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	printWarnings(errOut, v)
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	items := make([]listItem, 0, len(skills)+len(facts))
+	for _, s := range skills {
+		items = append(items, listItem{kind: "skill", name: s.Name, hook: s.Description})
+	}
+	for _, f := range facts {
+		items = append(items, listItem{kind: "memory", name: f.Name, hook: f.Description})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].kind != items[j].kind {
+			return items[i].kind < items[j].kind
+		}
+		return items[i].name < items[j].name
+	})
+	for _, it := range items {
+		hook := it.hook
+		if hook == "" {
+			hook = "(no description)"
+		}
+		fmt.Fprintf(out, "%s/%s — %s\n", it.kind, it.name, hook)
+	}
+	return 0
+}

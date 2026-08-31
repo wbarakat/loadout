@@ -362,6 +362,130 @@ func TestDoctorPrintsManifestWarnings(t *testing.T) {
 	}
 }
 
+func TestShowPrintsFileRaw(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "my-stack")
+	path := filepath.Join(base, "vault", "memory", "my-stack.md")
+	content := "---\nname: my-stack\ndescription: the stack I use\n---\n\nI use Go and Postgres.\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := run(t, "show", "memory/my-stack")
+	if code != 0 {
+		t.Fatalf("show failed: %s", errOut)
+	}
+	if out != content {
+		t.Fatalf("show must print the file raw, got %q", out)
+	}
+}
+
+func TestShowMissingItemExitsOne(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	_, errOut, code := run(t, "show", "memory/nope")
+	if code != 1 {
+		t.Fatalf("show on a missing item must exit 1, got %d", code)
+	}
+	want := "memory/nope: no such item. Fix: run loadout list.\n"
+	if errOut != want {
+		t.Fatalf("bad error: got %q want %q", errOut, want)
+	}
+}
+
+func TestShowRequiresAnAddress(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	if _, errOut, code := run(t, "show"); code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("show without an address must be a usage error, got %d %q", code, errOut)
+	}
+}
+
+func TestShowRejectsBadAddress(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	_, errOut, code := run(t, "show", "bogus")
+	if code != 1 {
+		t.Fatalf("a bad address must exit 1, got %d", code)
+	}
+	want := "bogus: not an address. Fix: use kind/name, for example memory/my-stack.\n"
+	if errOut != want {
+		t.Fatalf("bad error: got %q want %q", errOut, want)
+	}
+}
+
+func TestListShowsSkillsAndFactsInOrder(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+
+	skillPath := filepath.Join(base, "vault", "skills", "deploy-checks", "SKILL.md")
+	skillContent := "---\nname: deploy-checks\ndescription: run checks before a deploy\n---\n\nDo the thing.\n"
+	if err := os.WriteFile(skillPath, []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	factPath := filepath.Join(base, "vault", "memory", "my-stack.md")
+	factContent := "---\nname: my-stack\ndescription: the stack I use\n---\n\nI use Go.\n"
+	if err := os.WriteFile(factPath, []byte(factContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := run(t, "list")
+	if code != 0 {
+		t.Fatalf("list failed: %s", errOut)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 lines, got %q", out)
+	}
+	if lines[0] != "memory/my-stack — the stack I use" {
+		t.Fatalf("bad first line: %q", lines[0])
+	}
+	if lines[1] != "skill/deploy-checks — run checks before a deploy" {
+		t.Fatalf("bad second line: %q", lines[1])
+	}
+}
+
+func TestListShowsNoDescriptionPlaceholder(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "my-stack")
+	path := filepath.Join(base, "vault", "memory", "my-stack.md")
+	content := "---\nname: my-stack\n---\n\nNo description here.\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := run(t, "list")
+	if code != 0 {
+		t.Fatalf("list failed: %s", errOut)
+	}
+	if !strings.Contains(out, "memory/my-stack — (no description)") {
+		t.Fatalf("bad output: %q", out)
+	}
+}
+
+func TestEditMissingAddressExitsOne(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	_, errOut, code := run(t, "edit", "memory/nope")
+	if code != 1 {
+		t.Fatalf("edit on a missing item must exit 1, got %d", code)
+	}
+	want := "memory/nope: no such item. Fix: run loadout list.\n"
+	if errOut != want {
+		t.Fatalf("bad error: got %q want %q", errOut, want)
+	}
+}
+
+func TestEditRequiresAnAddress(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	if _, errOut, code := run(t, "edit"); code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("edit without an address must be a usage error, got %d %q", code, errOut)
+	}
+}
+
 func TestDoctorReportsMissingHistory(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")
