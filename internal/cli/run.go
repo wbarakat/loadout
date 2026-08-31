@@ -27,6 +27,8 @@ func Run(out, errOut io.Writer, args []string) int {
 		return cmdInit(out, errOut)
 	case "add":
 		return cmdAdd(out, errOut, args[1:])
+	case "sync":
+		return cmdSync(out, errOut)
 	default:
 		fmt.Fprintf(errOut, "unknown command %q\n%s", args[0], usage)
 		return 2

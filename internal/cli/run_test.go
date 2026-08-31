@@ -61,3 +61,30 @@ func TestInitAndAdd(t *testing.T) {
 		t.Fatalf("bad kind must be a usage error, got %d %q", code, errOut)
 	}
 }
+
+func TestSyncProjectsVault(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+
+	out, errOut, code := run(t, "sync")
+	if code != 0 {
+		t.Fatalf("sync failed: %s", errOut)
+	}
+	if !strings.Contains(out, "claude-code") || !strings.Contains(out, "pi") {
+		t.Fatalf("sync must name each adapter, got %q", out)
+	}
+	home := filepath.Join(base, "home")
+	if _, err := os.Readlink(filepath.Join(home, ".claude", "skills", "deploy-checks")); err != nil {
+		t.Fatal("the Claude Code skill link is missing")
+	}
+	if _, err := os.Readlink(filepath.Join(home, ".pi", "agent", "skills", "deploy-checks")); err != nil {
+		t.Fatal("the pi skill link is missing")
+	}
+	for _, f := range []string{filepath.Join(home, ".claude", "CLAUDE.md"), filepath.Join(home, ".pi", "agent", "AGENTS.md")} {
+		if _, err := os.Stat(f); err != nil {
+			t.Fatalf("missing %s", f)
+		}
+	}
+}
