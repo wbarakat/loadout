@@ -153,6 +153,9 @@ func TestGeminiMemoryFileCreatedOnFirstApply(t *testing.T) {
 	if !strings.Contains(block, "I use Go.") {
 		t.Fatalf("block must contain the fact content, got %q", block)
 	}
+	if !strings.Contains(block, "## How to use this memory (for agents)") {
+		t.Fatalf("block must contain the protocol footer, got %q", block)
+	}
 }
 
 func TestGeminiEnabledInRegistry(t *testing.T) {
@@ -185,5 +188,48 @@ func TestGeminiEnabledInRegistry(t *testing.T) {
 	}
 	if len(names) != 3 || names[0] != "claude-code" || names[1] != "pi" || names[2] != "gemini" {
 		t.Fatalf("bad registry order: %v", names)
+	}
+}
+
+func TestEnabledPinsFullRegistryOrder(t *testing.T) {
+	v := testVault(t)
+	home := t.TempDir()
+
+	// Enable all five adapters in the manifest.
+	v.Manifest.Adapters["claude-code"] = vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".claude", "skills"),
+		MemoryFile: filepath.Join(home, ".claude", "CLAUDE.md"),
+	}
+	v.Manifest.Adapters["pi"] = vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".pi", "skills"),
+		MemoryFile: filepath.Join(home, ".pi", "AGENTS.md"),
+	}
+	v.Manifest.Adapters["codex"] = vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".codex", "skills"),
+		MemoryFile: filepath.Join(home, ".codex", "AGENTS.md"),
+	}
+	v.Manifest.Adapters["gemini"] = vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".gemini", "skills"),
+		MemoryFile: filepath.Join(home, ".gemini", "GEMINI.md"),
+	}
+	v.Manifest.Adapters["agents-md"] = vault.AdapterConfig{
+		Enabled: true,
+		Targets: []string{filepath.Join(home, "agents.md")},
+	}
+
+	got := adapter.Enabled(v)
+	if len(got) != 5 {
+		t.Fatalf("Enabled must return all five adapters, got %d", len(got))
+	}
+
+	expectedOrder := []string{"claude-code", "pi", "codex", "gemini", "agents-md"}
+	for i, a := range got {
+		if a.Name() != expectedOrder[i] {
+			t.Fatalf("adapter at index %d: expected %q, got %q", i, expectedOrder[i], a.Name())
+		}
 	}
 }
