@@ -15,3 +15,24 @@ type Adapter interface {
 	Apply(v *vault.Vault) error
 	Check(v *vault.Vault) []Problem
 }
+
+// Enabled returns the enabled adapters from the manifest, in a
+// stable order.
+func Enabled(v *vault.Vault) []Adapter {
+	var out []Adapter
+	for _, name := range []string{"claude-code", "pi", "agents-md"} {
+		cfg, ok := v.Manifest.Adapters[name]
+		if !ok || !cfg.Enabled {
+			continue
+		}
+		switch name {
+		case "claude-code":
+			out = append(out, ClaudeCode{Cfg: cfg})
+		case "pi":
+			out = append(out, Pi{Cfg: cfg})
+		case "agents-md":
+			out = append(out, AgentsMD{Cfg: cfg})
+		}
+	}
+	return out
+}
