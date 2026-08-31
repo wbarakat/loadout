@@ -55,8 +55,25 @@ func Sync(v *vault.Vault) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := client.RegisterDevice(name, recipient); err != nil {
+	// Register this device only when it is not yet established: a
+	// device whose own devices.toml already lists its own current
+	// name and recipient already knows it is trusted, and has nothing
+	// new to tell the remote. Registering unconditionally, on every
+	// sync, would let a device whose trust was just revoked (rotated
+	// out of devices.toml on some other, still-approved device) keep
+	// silently re-asserting its evicted recipient onto the remote's
+	// bootstrap roster forever, just by attempting to sync — even
+	// though the sync itself always fails to decrypt. "loadout join"
+	// remains the one path a fresh or deliberately re-keyed device
+	// uses to register, unconditionally.
+	established, err := deviceEstablished(v, name, recipient)
+	if err != nil {
 		return Result{}, err
+	}
+	if !established {
+		if err := client.RegisterDevice(name, recipient); err != nil {
+			return Result{}, err
+		}
 	}
 
 	// A defensive snapshot: whatever is on disk right now must enter
@@ -99,6 +116,19 @@ func Sync(v *vault.Vault) (Result, error) {
 		return Result{}, err
 	}
 	return pullMergePush(v, client, serverVersion, state.BaseCommit, maxMergeRetries)
+}
+
+// deviceEstablished reports whether the vault's own devices.toml — the
+// real decrypt allowlist, never the remote's own, anyone-with-a-token-
+// writable bootstrap roster — already lists name with this exact
+// recipient. Sync calls this to decide whether it has anything new to
+// tell the remote about this device at all.
+func deviceEstablished(v *vault.Vault, name, recipient string) (bool, error) {
+	roster, err := vault.ReadRoster(v)
+	if err != nil {
+		return false, err
+	}
+	return roster[name] == recipient, nil
 }
 
 // push packs the vault's current content and publishes it as a new
