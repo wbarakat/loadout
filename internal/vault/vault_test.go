@@ -96,9 +96,36 @@ func TestInitWritesGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatal("Init must write a .gitignore file")
 	}
-	for _, entry := range []string{".DS_Store", "render/", "loadout.lock"} {
+	for _, entry := range []string{".DS_Store", "render/", "loadout.lock", "device.key", "device.name", "remote.toml", ".sync-state.json"} {
 		if !strings.Contains(string(data), entry) {
 			t.Fatalf(".gitignore missing %q, got %q", entry, string(data))
+		}
+	}
+}
+
+// TestOpenHealsMissingGitignoreLines proves a vault made before Phase
+// 4 — one whose .gitignore predates the device and sync entries —
+// gains those lines on Open, without losing its original ones.
+func TestOpenHealsMissingGitignoreLines(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "vault")
+	v, err := vault.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := ".DS_Store\nrender/\nloadout.lock\n"
+	if err := os.WriteFile(filepath.Join(v.Root, ".gitignore"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.Open(root); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []string{".DS_Store", "render/", "loadout.lock", "device.key", "device.name", "remote.toml", ".sync-state.json"} {
+		if !strings.Contains(string(data), entry) {
+			t.Fatalf("healed .gitignore missing %q, got %q", entry, string(data))
 		}
 	}
 }

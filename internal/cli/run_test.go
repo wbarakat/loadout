@@ -1168,6 +1168,7 @@ func TestNoArgVerbsRejectLeftoverArguments(t *testing.T) {
 		{"doctor", "extra"},
 		{"list", "extra"},
 		{"context", "extra"},
+		{"device", "extra"},
 		{"log", "extra"},
 		{"help", "extra"},
 	} {

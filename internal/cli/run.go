@@ -17,6 +17,7 @@ commands:
   edit KIND/NAME             open an item in $EDITOR
   recall TERM...             find items matching every term
   context                    show the compact picture of the vault
+  device                     show this device's name and age recipient
   sync [--dry-run]           project the vault into every enabled tool
   status                     show the vault and the adapter state
   doctor                     find problems and show the fix for each one
@@ -79,6 +80,11 @@ func Run(out, errOut io.Writer, args []string) int {
 			return 2
 		}
 		return cmdContext(out, errOut, m)
+	case "device":
+		if rejectExtraArgs(errOut, args[1:]) {
+			return 2
+		}
+		return cmdDevice(out, errOut, m)
 	case "sync":
 		return cmdSync(out, errOut, args[1:], m)
 	case "status":
@@ -112,9 +118,9 @@ func Run(out, errOut io.Writer, args []string) int {
 // rejectExtraArgs prints the usage text to errOut and reports true
 // when rest holds an argument. Run calls this for every verb that
 // takes no positional arguments — init, sync (after its own
-// "--dry-run" extraction), status, doctor, list, context, log, undo,
-// and help — so an unknown argument never rides along on a mutating
-// verb such as sync or undo.
+// "--dry-run" extraction), status, doctor, list, context, device,
+// log, undo, and help — so an unknown argument never rides along on
+// a mutating verb such as sync or undo.
 func rejectExtraArgs(errOut io.Writer, rest []string) bool {
 	if len(rest) == 0 {
 		return false

@@ -41,20 +41,45 @@ func gitkeepDirs(root string) []string {
 }
 
 // gitignoreContent lists the vault paths git must never track: OS
-// litter, the derived render output, and the lock file Lock creates.
-const gitignoreContent = ".DS_Store\nrender/\nloadout.lock\n"
+// litter, the derived render output, the lock file Lock creates, the
+// device identity, and the sync configuration and state Phase 4
+// adds. remote.toml and .sync-state.json arrive in later tasks;
+// ignoring them now is safe and saves a second edit here.
+const gitignoreContent = ".DS_Store\nrender/\nloadout.lock\ndevice.key\ndevice.name\nremote.toml\n.sync-state.json\n"
 
 // writeGitignoreIfMissing writes root/.gitignore when no such file
-// exists yet. Init calls it when it creates a vault; Open calls it
-// too, so a vault made before this file existed heals itself.
+// exists yet, and adds any gitignoreContent line missing from an
+// existing file. Init calls it when it creates a vault; Open calls it
+// too, so a vault made before a line existed heals itself.
 func writeGitignoreIfMissing(root string) error {
 	path := filepath.Join(root, ".gitignore")
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return os.WriteFile(path, []byte(gitignoreContent), 0o644)
+		}
 		return err
 	}
-	return os.WriteFile(path, []byte(gitignoreContent), 0o644)
+	present := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		present[strings.TrimSpace(line)] = true
+	}
+	content := string(data)
+	changed := false
+	for _, line := range strings.Split(strings.TrimRight(gitignoreContent, "\n"), "\n") {
+		if present[line] {
+			continue
+		}
+		if content != "" && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		content += line + "\n"
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 func Init(root string) (*Vault, error) {
