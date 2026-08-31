@@ -49,12 +49,19 @@ func DeviceRecipient(v *Vault) (string, error) {
 // a read or parse failure names only the path.
 func deviceKey(v *Vault) (*age.X25519Identity, error) {
 	path := deviceKeyPath(v)
-	data, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%s: the device key cannot be read: %v. Fix: check the file permissions.", path, err)
 		}
 		return generateDeviceKey(v, path)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("%s: the device key file mode is too open. Fix: run chmod 600 on the file.", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: the device key cannot be read: %v. Fix: check the file permissions.", path, err)
 	}
 	identity, err := age.ParseX25519Identity(strings.TrimSpace(string(data)))
 	if err != nil {
@@ -69,13 +76,13 @@ func deviceKey(v *Vault) (*age.X25519Identity, error) {
 func generateDeviceKey(v *Vault, path string) (*age.X25519Identity, error) {
 	identity, err := age.GenerateX25519Identity()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: the device identity cannot be written: %v. Fix: check the directory permissions.", path, err)
 	}
 	if err := writeGitignoreIfMissing(v.Root); err != nil {
 		return nil, err
 	}
 	if err := os.WriteFile(path, []byte(identity.String()+"\n"), 0o600); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: the device identity cannot be written: %v. Fix: check the directory permissions.", path, err)
 	}
 	return identity, nil
 }
@@ -93,16 +100,27 @@ func deviceName(v *Vault) (string, error) {
 	}
 	host, err := os.Hostname()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("the hostname cannot be read: %v. Fix: set a device name in %s.", err, path)
 	}
-	name := kebabCase(host)
+	name := deviceHostName(host)
 	if err := writeGitignoreIfMissing(v.Root); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(path, []byte(name+"\n"), 0o644); err != nil {
-		return "", err
+		return "", fmt.Errorf("%s: the device name cannot be written: %v. Fix: check the directory permissions.", path, err)
 	}
 	return name, nil
+}
+
+// deviceHostName reduces host to a device name: kebab-cased, and the
+// fixed name "device" when that leaves nothing usable. A symbol-only
+// or non-ASCII hostname would otherwise kebab-case to "", and
+// deviceName would store that empty name forever.
+func deviceHostName(host string) string {
+	if name := kebabCase(host); name != "" {
+		return name
+	}
+	return "device"
 }
 
 // kebabCase lowercases s and keeps only [a-z0-9-]: every other rune

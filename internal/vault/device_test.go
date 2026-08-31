@@ -172,6 +172,40 @@ func TestDeviceKeyUnreadableGivesFixedError(t *testing.T) {
 	}
 }
 
+// TestDeviceKeyTooOpenModeGivesFixedError proves a key file with
+// group or other permissions bits set is rejected before it is ever
+// read, even though the owner can still read it fine.
+func TestDeviceKeyTooOpenModeGivesFixedError(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "vault")
+	v, err := Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := DeviceIdentity(v); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(v.Root, "device.key")
+	if err := os.Chmod(keyPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(keyPath, 0o600)
+
+	_, err = DeviceRecipient(v)
+	want := keyPath + ": the device key file mode is too open. Fix: run chmod 600 on the file."
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+}
+
+// TestDeviceHostNameFallsBackForUnusableHostname proves a hostname
+// that kebab-cases to nothing — every rune outside [a-z0-9] — still
+// yields a usable, storable name instead of an empty string.
+func TestDeviceHostNameFallsBackForUnusableHostname(t *testing.T) {
+	if got := deviceHostName("日本語ホスト"); got != "device" {
+		t.Fatalf("deviceHostName(%q) = %q, want %q", "日本語ホスト", got, "device")
+	}
+}
+
 func TestKebabCase(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"Waleed's-MacBook.local", "waleed-s-macbook-local"},
