@@ -1,0 +1,389 @@
+package vault
+
+import (
+	"archive/tar"
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"filippo.io/age"
+	"github.com/BurntSushi/toml"
+)
+
+// devicesTomlPath returns the path to the vault's device roster.
+func devicesTomlPath(v *Vault) string { return filepath.Join(v.Root, "devices.toml") }
+
+// rosterDevice is one entry of the on-disk device roster.
+type rosterDevice struct {
+	Recipient string `toml:"recipient"`
+}
+
+// rosterFile is the on-disk shape of devices.toml.
+type rosterFile struct {
+	Devices map[string]rosterDevice `toml:"devices"`
+}
+
+// rosterErr wraps cause in the fixed grammar every devices.toml
+// failure uses. It never repeats file content, only the path and the
+// underlying cause.
+func rosterErr(path string, cause error) error {
+	return fmt.Errorf("%s: the device roster cannot be read: %v. Fix: repair the file, or remove it to sync with this device only.", path, cause)
+}
+
+// ReadRoster reads the vault's device roster: device name to age
+// recipient. A vault with no devices.toml yet has an empty roster,
+// not an error — every vault starts out synced to just this device.
+func ReadRoster(v *Vault) (map[string]string, error) {
+	rosterPath := devicesTomlPath(v)
+	var rf rosterFile
+	if _, err := toml.DecodeFile(rosterPath, &rf); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]string{}, nil
+		}
+		return nil, rosterErr(rosterPath, err)
+	}
+	roster := make(map[string]string, len(rf.Devices))
+	for name, d := range rf.Devices {
+		roster[name] = d.Recipient
+	}
+	return roster, nil
+}
+
+// AddToRoster adds name and recipient to the vault's device roster,
+// writing the file atomically with sorted, stable output. It does
+// not snapshot the vault: callers that want the change in history
+// call Snapshot themselves.
+func AddToRoster(v *Vault, name, recipient string) error {
+	roster, err := ReadRoster(v)
+	if err != nil {
+		return err
+	}
+	roster[name] = recipient
+	return writeRoster(v, roster)
+}
+
+// writeRoster encodes roster to devices.toml. It writes a temp file
+// first and renames it into place, so a crash mid-write never leaves
+// a half-written roster behind. github.com/BurntSushi/toml sorts map
+// keys before it encodes them, so the output is stable across calls
+// that add the same devices.
+func writeRoster(v *Vault, roster map[string]string) error {
+	rf := rosterFile{Devices: make(map[string]rosterDevice, len(roster))}
+	for name, recipient := range roster {
+		rf.Devices[name] = rosterDevice{Recipient: recipient}
+	}
+	rosterPath := devicesTomlPath(v)
+	tmp := rosterPath + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if err := toml.NewEncoder(f).Encode(rf); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, rosterPath)
+}
+
+// headHash returns the git HEAD commit hash: the vault content a
+// pack pins itself to. A vault with no history surfaces the same
+// fixed error every other history command uses.
+func headHash(v *Vault) (string, error) {
+	out, err := git(v, "rev-parse", "HEAD")
+	if err != nil {
+		return "", noHistoryErr(v, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// PackSnapshot builds an encrypted snapshot of the vault's synced
+// paths (SyncedSet) and reports the git HEAD hash that snapshot's
+// content is pinned to. It encrypts to every recipient listed in
+// devices.toml, or to this device alone when that file is absent or
+// lists no one.
+func PackSnapshot(v *Vault) (blob []byte, headHashOut string, err error) {
+	headHashOut, err = headHash(v)
+	if err != nil {
+		return nil, "", err
+	}
+	tarBytes, err := packTar(v)
+	if err != nil {
+		return nil, "", err
+	}
+	recipients, err := packRecipients(v)
+	if err != nil {
+		return nil, "", err
+	}
+	var buf bytes.Buffer
+	w, err := age.Encrypt(&buf, recipients...)
+	if err != nil {
+		return nil, "", fmt.Errorf("the snapshot cannot be encrypted: %v", err)
+	}
+	if _, err := w.Write(tarBytes); err != nil {
+		return nil, "", fmt.Errorf("the snapshot cannot be encrypted: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, "", fmt.Errorf("the snapshot cannot be encrypted: %v", err)
+	}
+	return buf.Bytes(), headHashOut, nil
+}
+
+// packRecipients lists the age recipients a pack must encrypt to:
+// every recipient in devices.toml, sorted by device name, or this
+// device alone when the roster is empty.
+func packRecipients(v *Vault) ([]age.Recipient, error) {
+	roster, err := ReadRoster(v)
+	if err != nil {
+		return nil, err
+	}
+	if len(roster) == 0 {
+		identity, err := deviceKey(v)
+		if err != nil {
+			return nil, err
+		}
+		return []age.Recipient{identity.Recipient()}, nil
+	}
+	names := make([]string, 0, len(roster))
+	for name := range roster {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	recipients := make([]age.Recipient, 0, len(names))
+	for _, name := range names {
+		r, err := age.ParseX25519Recipient(roster[name])
+		if err != nil {
+			return nil, rosterErr(devicesTomlPath(v), fmt.Errorf("device %q holds an invalid recipient", name))
+		}
+		recipients = append(recipients, r)
+	}
+	return recipients, nil
+}
+
+// packTar tars the vault's SyncedSet paths that exist, in a
+// deterministic byte order: every path sorted, timestamps zeroed to
+// the Unix epoch, and no per-machine user or group names. Two packs
+// of the same vault content produce byte-identical tar bytes; the
+// encrypted blob PackSnapshot builds from that tar is not
+// byte-identical across calls, since age randomizes the encryption,
+// but that randomization never touches the plaintext layer this
+// function builds.
+//
+// A symlink inside a synced path (a skill linking to shared
+// resources, say) is stored as a symlink, never followed: pack never
+// reads through it, so it cannot walk outside the vault.
+func packTar(v *Vault) ([]byte, error) {
+	var relPaths []string
+	for _, rel := range SyncedSet() {
+		full := filepath.Join(v.Root, rel)
+		if _, err := os.Lstat(full); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		err := filepath.WalkDir(full, func(walked string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			relPath, err := filepath.Rel(v.Root, walked)
+			if err != nil {
+				return err
+			}
+			relPaths = append(relPaths, relPath)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Strings(relPaths)
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, relPath := range relPaths {
+		if err := addTarEntry(tw, v.Root, relPath); err != nil {
+			return nil, err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// tarEpoch is the fixed modification time every tar entry gets, so a
+// file's real mtime never makes two packs of the same content differ.
+var tarEpoch = time.Unix(0, 0)
+
+// addTarEntry writes one tar entry for the file, directory, or
+// symlink at filepath.Join(root, relPath).
+func addTarEntry(tw *tar.Writer, root, relPath string) error {
+	full := filepath.Join(root, relPath)
+	fi, err := os.Lstat(full)
+	if err != nil {
+		return err
+	}
+	var link string
+	if fi.Mode()&os.ModeSymlink != 0 {
+		link, err = os.Readlink(full)
+		if err != nil {
+			return err
+		}
+	}
+	hdr, err := tar.FileInfoHeader(fi, link)
+	if err != nil {
+		return err
+	}
+	hdr.Name = filepath.ToSlash(relPath)
+	if fi.IsDir() && !strings.HasSuffix(hdr.Name, "/") {
+		hdr.Name += "/"
+	}
+	hdr.ModTime = tarEpoch
+	hdr.AccessTime = time.Time{}
+	hdr.ChangeTime = time.Time{}
+	hdr.Uid = 0
+	hdr.Gid = 0
+	hdr.Uname = ""
+	hdr.Gname = ""
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	if fi.Mode().IsRegular() {
+		f, err := os.Open(full)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if _, err := io.Copy(tw, f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unsafePathErr is the fixed error a traversal attempt in a snapshot
+// gets: the archive-relative name, never the resolved disk path,
+// since the resolved path is exactly what the check refused to
+// create.
+func unsafePathErr(name string) error {
+	return fmt.Errorf("%s: the snapshot holds an unsafe path. Fix: do not sync this snapshot; report it.", name)
+}
+
+// safeJoin resolves a tar entry's name against dir, refusing an
+// absolute name or one that climbs above dir with "..".
+func safeJoin(dir, name string) (string, error) {
+	slash := filepath.ToSlash(name)
+	if slash == "" || strings.HasPrefix(slash, "/") {
+		return "", errors.New("unsafe path")
+	}
+	cleaned := path.Clean(slash)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", errors.New("unsafe path")
+	}
+	return filepath.Join(dir, filepath.FromSlash(cleaned)), nil
+}
+
+// safeSymlinkTarget reports whether a symlink at entryPath (already
+// resolved inside dir) pointing at linkname would still resolve
+// inside dir. An absolute linkname is refused outright; a relative
+// one is resolved against the symlink's own directory before the
+// check, so a target that stays inside dir via a "../sibling" hop is
+// still accepted.
+func safeSymlinkTarget(entryPath, dir, linkname string) error {
+	if linkname == "" || filepath.IsAbs(filepath.FromSlash(linkname)) {
+		return errors.New("unsafe symlink target")
+	}
+	resolved := filepath.Join(filepath.Dir(entryPath), filepath.FromSlash(linkname))
+	rel, err := filepath.Rel(dir, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("unsafe symlink target")
+	}
+	return nil
+}
+
+// UnpackSnapshot decrypts blob with this device's identity and
+// extracts its tar content into dir. It refuses any entry whose name
+// or, for a symlink, whose target would land outside dir; nothing
+// from such an entry is written.
+func UnpackSnapshot(v *Vault, blob []byte, dir string) error {
+	identity, err := deviceKey(v)
+	if err != nil {
+		return err
+	}
+	r, err := age.Decrypt(bytes.NewReader(blob), identity)
+	if err != nil {
+		var noMatch *age.NoIdentityMatchError
+		if errors.As(err, &noMatch) {
+			return errors.New("this device cannot decrypt the snapshot. Fix: approve this device from an enrolled device, then sync again.")
+		}
+		return fmt.Errorf("the snapshot cannot be decrypted: %v", err)
+	}
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("the snapshot cannot be read: %v", err)
+		}
+		if err := extractTarEntry(dir, hdr, tr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// extractTarEntry writes one tar entry under dir, after checking
+// that doing so cannot land outside dir.
+func extractTarEntry(dir string, hdr *tar.Header, r io.Reader) error {
+	full, err := safeJoin(dir, hdr.Name)
+	if err != nil {
+		return unsafePathErr(hdr.Name)
+	}
+	mode := os.FileMode(hdr.Mode).Perm()
+	switch hdr.Typeflag {
+	case tar.TypeDir:
+		return os.MkdirAll(full, mode|0o700)
+	case tar.TypeSymlink:
+		if err := safeSymlinkTarget(full, dir, hdr.Linkname); err != nil {
+			return unsafePathErr(hdr.Name)
+		}
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(full); err != nil {
+			return err
+		}
+		return os.Symlink(hdr.Linkname, full)
+	case tar.TypeReg:
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(f, r)
+		return err
+	default:
+		// The vault tree never produces a hard link, device, or other
+		// exotic entry. Skipping one is safer than failing the whole
+		// unpack over content that cannot appear in a real snapshot.
+		return nil
+	}
+}
