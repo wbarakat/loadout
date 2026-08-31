@@ -3,8 +3,10 @@
 One secure home for your agent gear. Store your skills and your memory
 in one vault. Sync them to every agent tool.
 
-Phase 1 is local only. Cloud sync, secrets, and more adapters come next.
-See PLAN.md for the roadmap.
+Phase 2 adds the full agent interface: typed reports, the vault lock,
+provenance, review, and `--json` on every verb. Phase 1 and Phase 2
+are local only. Cloud sync, secrets, and more adapters come next. See
+PLAN.md for the roadmap.
 
 ## Install
 
@@ -24,6 +26,86 @@ Edit the files in ~/.loadout with any editor. Skills reach the tools
 through symlinks, so a skill edit is live at once. After a memory edit,
 run "loadout sync" again.
 
+## Verbs
+
+Every verb takes `--json`. Every verb is safe to re-run. This table
+lists every verb Loadout supports today.
+
+| Verb | Purpose |
+|---|---|
+| `init` | Create the vault. |
+| `add skill\|memory <name> [--by <who>]` | Scaffold a skill or a memory fact. Records who wrote it. |
+| `show <kind>/<name>` | Print one item's raw file content. |
+| `edit <kind>/<name>` | Open one item in `$EDITOR` (falls back to `vi`). |
+| `list` | Print every item, one hook line each. |
+| `context` | Print the compact picture of the vault: counts, every hook, recent history. |
+| `recall <term>...` | Search hooks and bodies for items that match every term. |
+| `sync [--dry-run]` | Project the vault into every enabled tool. |
+| `status` | Print vault counts and each adapter's sync state. |
+| `doctor` | List every problem, each with its exact fix. |
+| `log` | Print the vault history, newest first. |
+| `undo` | Restore the vault to the state before its last change. |
+| `review` | List draft items — items an agent wrote — that await your decision. |
+| `review keep <kind>/<name>` | Mark a draft item kept. |
+| `review drop <kind>/<name>` | Delete a draft item. |
+
+Run `loadout help` at any time to print this list from the binary
+itself.
+
+### `--json`
+
+Add `--json` to any verb. Loadout then prints one JSON object to
+stdout instead of text, with a stable schema and a deterministic
+field order. Nothing else changes: exit codes stay the same, and
+warnings still print to stderr as text. The one exception is `edit`:
+it opens an interactive editor, so it has no JSON output. Pass `--json`
+to `edit` and Loadout exits 2 with a fixed error instead of opening
+anything.
+
+### `--dry-run`
+
+Add `--dry-run` to `sync`. Loadout then walks every adapter and reports
+the full projection plan — what it would link, prune, or block — and
+writes nothing to disk. Use it to check the vault's state before you
+commit to a real sync. `sync --dry-run` never takes the vault lock and
+never fails on a blocked path; it only fails when a projected file is
+damaged in a way sync itself could not fix.
+
+### `--by`
+
+Add `--by <who>` to `add`. It names who wrote the item: a human, or an
+agent tool such as `claude-code` or `pi`. Loadout records this on the
+item itself, along with the time. Omit `--by` and Loadout assumes a
+human wrote the item, and marks it kept at once. Any other `--by` value
+marks the item a draft, so a human reviews it before it counts as
+final.
+
+## The review flow
+
+An agent can add a skill or a memory fact straight to the vault. To
+keep the human in control, an agent-written item starts as a **draft**.
+A human-written item is already **kept**.
+
+- `loadout review` lists every draft, with who wrote it and when.
+- `loadout review keep <kind>/<name>` marks a draft item kept.
+- `loadout review drop <kind>/<name>` deletes a draft item for good.
+
+Run `loadout sync` after a `keep` or a `drop`, so every projection
+reflects the decision.
+
+## Doctor and the orphan scan
+
+`loadout doctor` checks every adapter's projection against the vault
+and reports each mismatch, with its exact fix. This covers a missing
+link, a stale link, a stale memory block, and a path a real file or a
+foreign symlink blocks.
+
+It also runs an orphan scan: it looks for a Loadout-owned symlink in
+each adapter's skills directory that no current skill explains — for
+example, a link left behind after you delete a skill from the vault.
+Run `loadout sync` to prune it. Doctor never flags a real file or a
+symlink you made yourself; those are yours to keep.
+
 ## Enable more adapters
 
 Some adapters are off by default. The agents-md adapter writes your
@@ -42,7 +124,12 @@ each target file.
 
 ## How it stays safe
 
-- Loadout writes only inside marked blocks in shared files.
-- Loadout never replaces a real file or directory with a symlink.
-- The local git history in the vault records the state at each add
-  and each sync. Undo with git if you need to.
+- Loadout writes only inside marked blocks in shared files, and inside
+  its own symlinks.
+- Loadout never replaces a real file, a real directory, or a foreign
+  symlink with one of its own.
+- Every write to the vault takes a lock, so two agents never corrupt
+  it by writing at once.
+- The local git history in the vault records the state at each add,
+  each review decision, and each sync. `loadout log` shows it;
+  `loadout undo` reverts to the state before the last change.

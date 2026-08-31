@@ -65,7 +65,12 @@ func (a ClaudeCode) Check(v *vault.Vault) []Problem {
 	if err != nil {
 		return []Problem{{a.Name(), err.Error(), "repair the vault skills directory"}}
 	}
-	ps = append(ps, checkLinks(a.Name(), skills, v.SkillsDir(), vault.ExpandPath(a.Cfg.SkillsDir))...)
+	skillsDir := vault.ExpandPath(a.Cfg.SkillsDir)
+	ps = append(ps, checkLinks(a.Name(), skills, v.SkillsDir(), skillsDir)...)
+	for _, p := range orphanLinks(skills, v.SkillsDir(), skillsDir) {
+		p.Adapter = a.Name()
+		ps = append(ps, p)
+	}
 	got, ok := ReadManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile))
 	if !ok || got != a.memoryImport(v) {
 		ps = append(ps, Problem{a.Name(), "the memory import block is missing or stale", "run: loadout sync"})

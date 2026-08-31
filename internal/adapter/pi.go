@@ -57,7 +57,12 @@ func (a Pi) Check(v *vault.Vault) []Problem {
 	if err != nil {
 		return []Problem{{a.Name(), err.Error(), "repair the vault skills directory"}}
 	}
-	ps = append(ps, checkLinks(a.Name(), skills, v.SkillsDir(), vault.ExpandPath(a.Cfg.SkillsDir))...)
+	skillsDir := vault.ExpandPath(a.Cfg.SkillsDir)
+	ps = append(ps, checkLinks(a.Name(), skills, v.SkillsDir(), skillsDir)...)
+	for _, p := range orphanLinks(skills, v.SkillsDir(), skillsDir) {
+		p.Adapter = a.Name()
+		ps = append(ps, p)
+	}
 	facts, err := vault.ListFacts(v)
 	if err != nil {
 		return append(ps, Problem{a.Name(), err.Error(), "repair the vault memory directory"})

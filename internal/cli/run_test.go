@@ -438,6 +438,34 @@ func TestDoctorReportsEmbeddedGitRepo(t *testing.T) {
 	}
 }
 
+// TestDoctorReportsStaleLinkAfterSkillDeleted proves the orphan scan:
+// deleting a skill folder after a sync leaves its symlink behind in
+// every adapter's skills directory, and doctor must now catch that —
+// this was invisible before. A second sync prunes the stale links,
+// and doctor goes quiet again.
+func TestDoctorReportsStaleLinkAfterSkillDeleted(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "sync")
+
+	if err := os.RemoveAll(filepath.Join(base, "vault", "skills", "deploy-checks")); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := run(t, "doctor")
+	if code != 1 || !strings.Contains(out, "stale link") || !strings.Contains(out, "loadout sync") {
+		t.Fatalf("doctor must report the stale link, got code=%d out=%q", code, out)
+	}
+
+	run(t, "sync")
+
+	out, _, code = run(t, "doctor")
+	if code != 0 || !strings.Contains(out, "all good") {
+		t.Fatalf("doctor must go quiet after sync, got code=%d out=%q", code, out)
+	}
+}
+
 // appendManifestKey adds a raw TOML line to the vault's manifest, so
 // tests can plant an unknown key for the warning path.
 func appendManifestKey(t *testing.T, base, line string) {
