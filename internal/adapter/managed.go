@@ -66,7 +66,7 @@ func WriteManagedBlock(path, content string) error {
 	// checkManagedBlockDamage above already caught this; this stays as
 	// a defensive fallback so a race between the two reads still fails
 	// safely instead of writing over a damaged file.
-	return fmt.Errorf("the loadout marks in %s are damaged: repair or remove them", path)
+	return fmt.Errorf("the loadout marks in %s are damaged. Fix: repair or remove the marks in %s.", path, path)
 }
 
 // checkManagedBlockDamage reads the file at path and reports whether
@@ -94,7 +94,7 @@ func checkManagedBlockDamage(path string) error {
 	if beginCount == 1 && endCount == 1 && strings.Index(text, beginMark) < strings.Index(text, endMark) {
 		return nil
 	}
-	return fmt.Errorf("the loadout marks in %s are damaged: repair or remove them", path)
+	return fmt.Errorf("the loadout marks in %s are damaged. Fix: repair or remove the marks in %s.", path, path)
 }
 
 // writeFileAtomic writes data to path so a reader never sees a partial

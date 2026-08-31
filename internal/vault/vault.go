@@ -64,7 +64,7 @@ func Init(root string) (*Vault, error) {
 		return nil, err
 	}
 	if _, err := os.Stat(filepath.Join(root, "loadout.toml")); err == nil {
-		return nil, fmt.Errorf("a vault already exists at %s", root)
+		return nil, fmt.Errorf("a vault already exists at %s. Fix: open it with any loadout command, or choose another LOADOUT_HOME.", root)
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err

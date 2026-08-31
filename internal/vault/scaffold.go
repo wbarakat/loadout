@@ -35,7 +35,7 @@ func AddSkill(v *Vault, name, by string) (string, error) {
 	}
 	dir := filepath.Join(v.SkillsDir(), name)
 	if _, err := os.Stat(dir); err == nil {
-		return "", fmt.Errorf("the skill %s already exists", name)
+		return "", fmt.Errorf("the skill %s already exists. Fix: choose another name, or edit the existing item.", name)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -54,7 +54,7 @@ func AddFact(v *Vault, name, by string) (string, error) {
 	}
 	path := filepath.Join(v.MemoryDir(), name+".md")
 	if _, err := os.Stat(path); err == nil {
-		return "", fmt.Errorf("the fact %s already exists", name)
+		return "", fmt.Errorf("the fact %s already exists. Fix: choose another name, or edit the existing item.", name)
 	}
 	content := "---\nname: " + name + "\ndescription: <one line summary>\ntype: user\n" +
 		provenanceLines(by) + "---\n\n<write the fact here>\n"

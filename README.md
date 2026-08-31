@@ -4,8 +4,9 @@ One secure home for your agent gear. Store your skills and your memory
 in one vault. Sync them to every agent tool.
 
 Phase 2 adds the full agent interface: typed reports, the vault lock,
-provenance, review, and `--json` on every verb. Phase 1 and Phase 2
-are local only. Cloud sync, secrets, and more adapters come next. See
+provenance, review, and `--json` on every verb. Phase 3 adds adapters
+for six local agent tools, plus a generic AGENTS.md adapter. Phase 1
+through Phase 3 are local only. Cloud sync and secrets come next. See
 PLAN.md for the roadmap.
 
 ## Install
@@ -108,12 +109,50 @@ example, a link left behind after you delete a skill from the vault.
 Run `loadout sync` to prune it. Doctor never flags a real file or a
 symlink you made yourself; those are yours to keep.
 
-## Enable more adapters
+## Adapters
 
-Some adapters are off by default. The agents-md adapter writes your
-memory and a skills index into any AGENTS.md file you name. Init
-already wrote a `[adapters.agents-md]` section in loadout.toml. Open
-that section and edit it:
+Loadout projects skills and memory into six agent tools, plus any
+AGENTS.md file you name. Every adapter links skills as symlinks, so a
+skill edit is live at once. Each adapter writes memory in one of three
+modes:
+
+- **import line** — writes one line into the memory file. The line
+  points at a rendered file that holds the full memory content. This
+  keeps the memory file short.
+- **memory block** — writes the full rendered memory straight into
+  the memory file, inside loadout marks.
+- **skills only** — links skills but writes no memory file, since the
+  tool has no stable shared-instructions file today.
+
+| Adapter | Memory mode | Default skills dir | Default memory file | Enabled by default |
+|---|---|---|---|---|
+| `claude-code` | import line | `~/.claude/skills` | `~/.claude/CLAUDE.md` | Yes |
+| `pi` | memory block | `~/.pi/agent/skills` | `~/.pi/agent/AGENTS.md` | Yes |
+| `codex` | memory block | `~/.codex/skills` | `~/.codex/AGENTS.md` | No |
+| `gemini` | memory block | `~/.gemini/skills` | `~/.gemini/GEMINI.md` | No |
+| `cursor` | skills only | `~/.cursor/skills` | none | No |
+| `hermes` | skills only | `~/.hermes/skills` | none | No |
+
+`codex`, `gemini`, `cursor`, and `hermes` are off by default. Init
+already wrote a stanza for each one in loadout.toml, with the default
+paths above filled in. To turn one on, open loadout.toml and edit the
+existing stanza, for example:
+
+    [adapters.codex]
+    enabled = true
+    skills_dir = "~/.codex/skills"
+    memory_file = "~/.codex/AGENTS.md"
+
+Set "enabled" to true. Do not add a second `[adapters.codex]` section.
+Edit the section that is already there. Run "loadout sync" to write
+the projection.
+
+### The agents-md adapter
+
+The agents-md adapter writes your memory and a skills index into any
+AGENTS.md file you name. It is off by default, since it has no
+default target. Init already wrote a `[adapters.agents-md]` section in
+loadout.toml. Open that section and edit it:
 
     [adapters.agents-md]
     enabled = true
