@@ -15,8 +15,18 @@ type Pi struct {
 func (a Pi) Name() string { return "pi" }
 
 func (a Pi) Apply(v *vault.Vault) error {
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		return err
+	}
 	skills, err := vault.ListSkills(v)
 	if err != nil {
+		return err
+	}
+	if err := scanForMarks(facts, skills); err != nil {
+		return err
+	}
+	if err := WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), vault.RenderMemory(facts)); err != nil {
 		return err
 	}
 	skillsDir := vault.ExpandPath(a.Cfg.SkillsDir)
@@ -27,14 +37,7 @@ func (a Pi) Apply(v *vault.Vault) error {
 	if len(blocked) > 0 {
 		return blockedSkillsError(blocked, skillsDir)
 	}
-	facts, err := vault.ListFacts(v)
-	if err != nil {
-		return err
-	}
-	if err := scanForMarks(facts, skills); err != nil {
-		return err
-	}
-	return WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), vault.RenderMemory(facts))
+	return nil
 }
 
 func (a Pi) Check(v *vault.Vault) []Problem {

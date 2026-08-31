@@ -10,12 +10,24 @@ import (
 	"loadout.dev/loadout/internal/vault"
 )
 
+// canonicalPath resolves the symlinks in path, so two different
+// spellings of the same location compare equal — for example /tmp
+// and /private/tmp on macOS. If path does not exist yet (a dangling
+// link target), it falls back to a cleaned version of the raw value.
+func canonicalPath(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return resolved
+}
+
 // isVaultOwned reports whether target is the vault skills directory,
 // or lies inside it. Loadout only ever creates a link with a target
-// like this; any other target belongs to the user.
+// like this; any other target belongs to the user. vaultSkillsDir
+// must already be canonical (see canonicalPath).
 func isVaultOwned(target, vaultSkillsDir string) bool {
-	target = filepath.Clean(target)
-	vaultSkillsDir = filepath.Clean(vaultSkillsDir)
+	target = canonicalPath(target)
 	return target == vaultSkillsDir || strings.HasPrefix(target, vaultSkillsDir+string(filepath.Separator))
 }
 
@@ -29,6 +41,7 @@ func LinkSkills(skills []vault.Skill, vaultSkillsDir, dir string) (blocked []str
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	vaultSkillsDir = canonicalPath(vaultSkillsDir)
 	want := make(map[string]string, len(skills))
 	for _, s := range skills {
 		want[s.Name] = s.Dir
@@ -44,7 +57,7 @@ func LinkSkills(skills []vault.Skill, vaultSkillsDir, dir string) (blocked []str
 				blocked = append(blocked, s.Name)
 				continue
 			}
-			if cur == s.Dir {
+			if canonicalPath(cur) == canonicalPath(s.Dir) {
 				continue
 			}
 			if err := os.Remove(linkPath); err != nil {
@@ -84,7 +97,7 @@ func pruneLinks(dir, vaultSkillsDir string, want map[string]string) error {
 		if err != nil || !isVaultOwned(cur, vaultSkillsDir) {
 			continue
 		}
-		if target, ok := want[e.Name()]; ok && target == cur {
+		if target, ok := want[e.Name()]; ok && canonicalPath(target) == canonicalPath(cur) {
 			continue
 		}
 		if err := os.Remove(path); err != nil {
@@ -100,7 +113,7 @@ func blockedSkillsError(names []string, dir string) error {
 	msgs := make([]string, len(names))
 	for i, name := range names {
 		path := filepath.Join(dir, name)
-		msgs[i] = fmt.Sprintf("the skill %s is blocked: a real file or a foreign link occupies %s; move or remove it", name, path)
+		msgs[i] = fmt.Sprintf("the skill %s is blocked: a real file or a foreign link occupies %s; move or remove it. the link may point at another Loadout vault, or at this vault through a different path spelling.", name, path)
 	}
 	return errors.New(strings.Join(msgs, "\n"))
 }
@@ -112,6 +125,7 @@ func blockedSkillsError(names []string, dir string) error {
 // removing it.
 func checkLinks(name string, skills []vault.Skill, vaultSkillsDir, dir string) []Problem {
 	var ps []Problem
+	vaultSkillsDir = canonicalPath(vaultSkillsDir)
 	for _, s := range skills {
 		path := filepath.Join(dir, s.Name)
 		fi, statErr := os.Lstat(path)
@@ -122,7 +136,7 @@ func checkLinks(name string, skills []vault.Skill, vaultSkillsDir, dir string) [
 			cur, readErr := os.Readlink(path)
 			if readErr != nil || !isVaultOwned(cur, vaultSkillsDir) {
 				ps = append(ps, Problem{name, "a real file or a foreign link occupies " + path, "move or remove " + path})
-			} else if cur != s.Dir {
+			} else if canonicalPath(cur) != canonicalPath(s.Dir) {
 				ps = append(ps, Problem{name, "the skill " + s.Name + " is not linked", "run: loadout sync"})
 			}
 		default:

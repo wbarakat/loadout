@@ -102,3 +102,33 @@ func TestClaudeCodeApplyReportsBlockedSkill(t *testing.T) {
 		t.Fatalf("Check must report the occupied path with a move-or-remove fix: %+v", a.Check(v))
 	}
 }
+
+func TestClaudeCodeApplyProjectsMemoryDespiteBlockedSkill(t *testing.T) {
+	v := testVault(t)
+	home := t.TempDir()
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".claude", "skills"),
+		MemoryFile: filepath.Join(home, ".claude", "CLAUDE.md"),
+	}
+	a := adapter.ClaudeCode{Cfg: cfg}
+	// A real directory occupies the skill's link path: it blocks the link.
+	blockedPath := filepath.Join(cfg.SkillsDir, "deploy-checks")
+	if err := os.MkdirAll(blockedPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := a.Apply(v)
+	if err == nil {
+		t.Fatal("Apply must still report the blocked skill")
+	}
+	// One blocked skill must not stop the memory projection.
+	data, err := os.ReadFile(filepath.Join(v.RenderDir(), "memory.md"))
+	if err != nil || !strings.Contains(string(data), "I use Go.") {
+		t.Fatalf("the rendered memory must still be written: %v", err)
+	}
+	block, ok := adapter.ReadManagedBlock(cfg.MemoryFile)
+	if !ok || block != "@"+filepath.Join(v.RenderDir(), "memory.md") {
+		t.Fatalf("the CLAUDE.md import block must still be written: %q ok=%v", block, ok)
+	}
+}

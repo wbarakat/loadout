@@ -41,6 +41,21 @@ func TestOpenMissingVault(t *testing.T) {
 	}
 }
 
+func TestOpenRefusesRelativeManifestPath(t *testing.T) {
+	root := t.TempDir()
+	toml := "version = 1\n\n[adapters.agents-md]\nenabled = true\ntargets = [\"AGENTS.md\"]\n"
+	if err := os.WriteFile(filepath.Join(root, "loadout.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := vault.Open(root)
+	if err == nil {
+		t.Fatal("Open must refuse a relative path in the manifest")
+	}
+	if !strings.Contains(err.Error(), "adapters.agents-md.targets") || !strings.Contains(err.Error(), "AGENTS.md") {
+		t.Fatalf("error must name the key and the value, got %v", err)
+	}
+}
+
 func TestOpenCorruptManifest(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "loadout.toml"), []byte("not = [valid"), 0o644); err != nil {

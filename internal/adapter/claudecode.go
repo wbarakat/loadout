@@ -20,6 +20,17 @@ func (a ClaudeCode) memoryImport(v *vault.Vault) string {
 }
 
 func (a ClaudeCode) Apply(v *vault.Vault) error {
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		return err
+	}
+	renderPath := filepath.Join(v.RenderDir(), "memory.md")
+	if err := writeFileAtomic(renderPath, []byte(vault.RenderMemory(facts))); err != nil {
+		return err
+	}
+	if err := WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), a.memoryImport(v)); err != nil {
+		return err
+	}
 	skills, err := vault.ListSkills(v)
 	if err != nil {
 		return err
@@ -32,15 +43,7 @@ func (a ClaudeCode) Apply(v *vault.Vault) error {
 	if len(blocked) > 0 {
 		return blockedSkillsError(blocked, skillsDir)
 	}
-	facts, err := vault.ListFacts(v)
-	if err != nil {
-		return err
-	}
-	renderPath := filepath.Join(v.RenderDir(), "memory.md")
-	if err := os.WriteFile(renderPath, []byte(vault.RenderMemory(facts)), 0o644); err != nil {
-		return err
-	}
-	return WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), a.memoryImport(v))
+	return nil
 }
 
 func (a ClaudeCode) Check(v *vault.Vault) []Problem {

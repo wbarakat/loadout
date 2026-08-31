@@ -27,15 +27,18 @@ run "loadout sync" again.
 ## Enable more adapters
 
 Some adapters are off by default. The agents-md adapter writes your
-memory and a skills index into any AGENTS.md file you name. To turn
-it on, add this to loadout.toml in the vault:
+memory and a skills index into any AGENTS.md file you name. Init
+already wrote a `[adapters.agents-md]` section in loadout.toml. Open
+that section and edit it:
 
     [adapters.agents-md]
     enabled = true
     targets = ["~/some-project/AGENTS.md"]
 
-List one or more target files under "targets". Run "loadout sync" to
-write the block into each one.
+Set "enabled" to true. List one or more target files under "targets".
+Do not add a second `[adapters.agents-md]` section. Edit the section
+that is already there. Run "loadout sync" to write the block into
+each target file.
 
 ## How it stays safe
 

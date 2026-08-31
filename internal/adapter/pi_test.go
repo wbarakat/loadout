@@ -41,6 +41,30 @@ func TestPiApplyAndCheck(t *testing.T) {
 	}
 }
 
+func TestPiApplyProjectsMemoryDespiteBlockedSkill(t *testing.T) {
+	v := testVault(t)
+	home := t.TempDir()
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".pi", "agent", "skills"),
+		MemoryFile: filepath.Join(home, ".pi", "AGENTS.md"),
+	}
+	a := adapter.Pi{Cfg: cfg}
+	blockedPath := filepath.Join(cfg.SkillsDir, "deploy-checks")
+	if err := os.MkdirAll(blockedPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := a.Apply(v)
+	if err == nil {
+		t.Fatal("Apply must still report the blocked skill")
+	}
+	block, ok := adapter.ReadManagedBlock(cfg.MemoryFile)
+	if !ok || !strings.Contains(block, "I use Go.") {
+		t.Fatalf("the memory block must still be written despite the blocked skill: %q ok=%v", block, ok)
+	}
+}
+
 func TestPiApplyRefusesFactWithMark(t *testing.T) {
 	v := testVault(t)
 	os.WriteFile(filepath.Join(v.MemoryDir(), "stack.md"),

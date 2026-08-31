@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 type Vault struct {
@@ -73,6 +75,9 @@ func Open(root string) (*Vault, error) {
 		}
 		return nil, fmt.Errorf("the manifest at %s is unreadable: %v", root, err)
 	}
+	if err := validateManifestPaths(m); err != nil {
+		return nil, err
+	}
 	// The three content directories are structural: recreate any that
 	// went missing, so a stray "rm -rf" does not wedge the vault.
 	for _, d := range structuralDirs(root) {
@@ -81,6 +86,41 @@ func Open(root string) (*Vault, error) {
 		}
 	}
 	return &Vault{Root: root, Manifest: m}, nil
+}
+
+// validateManifestPaths checks that every path an adapter writes to
+// is an absolute path or a ~ path. A path relative to the current
+// directory would point somewhere different on every run.
+func validateManifestPaths(m Manifest) error {
+	names := make([]string, 0, len(m.Adapters))
+	for name := range m.Adapters {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		cfg := m.Adapters[name]
+		if err := checkAbsOrHome("adapters."+name+".skills_dir", cfg.SkillsDir); err != nil {
+			return err
+		}
+		if err := checkAbsOrHome("adapters."+name+".memory_file", cfg.MemoryFile); err != nil {
+			return err
+		}
+		for _, target := range cfg.Targets {
+			if err := checkAbsOrHome("adapters."+name+".targets", target); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkAbsOrHome reports an error naming key if value is neither
+// empty, absolute, nor a ~ path.
+func checkAbsOrHome(key, value string) error {
+	if value == "" || strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~") {
+		return nil
+	}
+	return fmt.Errorf("the manifest key %s holds a relative path %q. Fix: use an absolute path or a ~ path.", key, value)
 }
 
 func (v *Vault) SkillsDir() string { return filepath.Join(v.Root, "skills") }
