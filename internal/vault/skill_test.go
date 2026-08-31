@@ -48,3 +48,33 @@ func TestListSkills(t *testing.T) {
 		t.Fatalf("bad invalid list: %v", bad)
 	}
 }
+
+func TestListSkillsFollowsSymlinkedSkillDir(t *testing.T) {
+	v := newVault(t)
+	writeSkill(t, v, "deploy-checks", "run checks before a deploy")
+	realDir := filepath.Join(v.SkillsDir(), "deploy-checks")
+	aliasDir := filepath.Join(v.SkillsDir(), "deploy-checks-alias")
+	if err := os.Symlink(realDir, aliasDir); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, s := range skills {
+		names[s.Name] = true
+	}
+	if !names["deploy-checks"] || !names["deploy-checks-alias"] {
+		t.Fatalf("both the real dir and the symlinked alias must list: %v", skills)
+	}
+
+	bad, err := vault.InvalidSkillDirs(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bad) != 0 {
+		t.Fatalf("the symlinked alias must not be invalid: %v", bad)
+	}
+}

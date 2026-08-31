@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 
 	"loadout.dev/loadout/internal/adapter"
 	"loadout.dev/loadout/internal/vault"
@@ -15,6 +17,19 @@ func cmdDoctor(out, errOut io.Writer) int {
 		return 1
 	}
 	count := 0
+	if _, err := os.Stat(filepath.Join(v.Root, ".git")); err != nil {
+		count++
+		fmt.Fprintln(out, "vault: the vault history is missing\n  fix: restore the .git directory from a backup, or re-create the vault.")
+	}
+	repos, err := vault.EmbeddedSkillRepos(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	for _, d := range repos {
+		count++
+		fmt.Fprintf(out, "vault: the skill folder %s is a git repository\n  fix: remove its .git directory; the vault keeps history for you.\n", d)
+	}
 	bad, err := vault.InvalidSkillDirs(v)
 	if err != nil {
 		fmt.Fprintln(errOut, err)

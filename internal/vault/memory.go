@@ -16,8 +16,12 @@ type Fact struct {
 }
 
 // parseFrontmatter splits simple "key: value" frontmatter from the body.
+// It strips a leading UTF-8 byte order mark, and normalizes CRLF line
+// endings to LF, so a file from another editor still parses.
 func parseFrontmatter(raw []byte) (map[string]string, string) {
 	text := string(raw)
+	text = strings.TrimPrefix(text, "\ufeff")
+	text = strings.ReplaceAll(text, "\r\n", "\n")
 	fields := map[string]string{}
 	if !strings.HasPrefix(text, "---\n") {
 		return fields, text

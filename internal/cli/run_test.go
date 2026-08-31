@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -62,6 +63,40 @@ func TestInitAndAdd(t *testing.T) {
 	}
 }
 
+func TestAddIsTransactionalWhenHistoryFails(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	vaultRoot := filepath.Join(base, "vault")
+	if err := os.RemoveAll(filepath.Join(vaultRoot, ".git")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errOut, code := run(t, "add", "skill", "deploy-checks")
+	if code != 1 {
+		t.Fatalf("add must fail without history, got %d %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(vaultRoot, "skills", "deploy-checks")); !os.IsNotExist(err) {
+		t.Fatal("the skill must not remain on disk after a failed add")
+	}
+
+	_, errOut, code = run(t, "add", "memory", "my-stack")
+	if code != 1 {
+		t.Fatalf("add must fail without history, got %d %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(vaultRoot, "memory", "my-stack.md")); !os.IsNotExist(err) {
+		t.Fatal("the fact must not remain on disk after a failed add")
+	}
+
+	// Restore history; a retry must now succeed.
+	if out, err := exec.Command("git", "-C", vaultRoot, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v: %s", err, out)
+	}
+	_, errOut, code = run(t, "add", "skill", "deploy-checks")
+	if code != 0 {
+		t.Fatalf("retry must succeed, got %d %q", code, errOut)
+	}
+}
+
 func TestSyncProjectsVault(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")
@@ -86,6 +121,28 @@ func TestSyncProjectsVault(t *testing.T) {
 		if _, err := os.Stat(f); err != nil {
 			t.Fatalf("missing %s", f)
 		}
+	}
+}
+
+func TestSyncLinksSymlinkedSkillDir(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+
+	vaultRoot := filepath.Join(base, "vault")
+	realDir := filepath.Join(vaultRoot, "skills", "deploy-checks")
+	aliasDir := filepath.Join(vaultRoot, "skills", "deploy-checks-alias")
+	if err := os.Symlink(realDir, aliasDir); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errOut, code := run(t, "sync")
+	if code != 0 {
+		t.Fatalf("sync failed: %s", errOut)
+	}
+	home := filepath.Join(base, "home")
+	if _, err := os.Readlink(filepath.Join(home, ".claude", "skills", "deploy-checks-alias")); err != nil {
+		t.Fatal("the symlinked alias must also be linked into the tool")
 	}
 }
 
@@ -146,5 +203,37 @@ func TestStatusAndDoctor(t *testing.T) {
 	out, _, code = run(t, "doctor")
 	if code != 0 || !strings.Contains(out, "all good") {
 		t.Fatalf("doctor after sync: code=%d out=%q", code, out)
+	}
+}
+
+func TestDoctorReportsEmbeddedGitRepo(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	dir := filepath.Join(base, "vault", "skills", "deploy-checks")
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := run(t, "doctor")
+	if code != 1 {
+		t.Fatalf("doctor must report a problem, got %d", code)
+	}
+	if !strings.Contains(out, dir) || !strings.Contains(out, "git repository") {
+		t.Fatalf("doctor must name the embedded repo, got %q", out)
+	}
+}
+
+func TestDoctorReportsMissingHistory(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	if err := os.RemoveAll(filepath.Join(base, "vault", ".git")); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := run(t, "doctor")
+	if code != 1 {
+		t.Fatalf("doctor must report a problem, got %d", code)
+	}
+	if !strings.Contains(out, "the vault history is missing") {
+		t.Fatalf("doctor must report the missing history, got %q", out)
 	}
 }
