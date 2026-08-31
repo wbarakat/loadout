@@ -31,6 +31,7 @@ func DefaultManifest() Manifest {
 			"pi":          {Enabled: true, SkillsDir: "~/.pi/agent/skills", MemoryFile: "~/.pi/agent/AGENTS.md"},
 			"codex":       {Enabled: false, SkillsDir: "~/.codex/skills", MemoryFile: "~/.codex/AGENTS.md"},
 			"gemini":      {Enabled: false, SkillsDir: "~/.gemini/skills", MemoryFile: "~/.gemini/GEMINI.md"},
+			"cursor":      {Enabled: false, SkillsDir: "~/.cursor/skills"},
 			"agents-md":   {Enabled: false},
 		},
 	}
