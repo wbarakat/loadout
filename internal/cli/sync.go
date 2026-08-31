@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"loadout.dev/loadout/internal/adapter"
 	"loadout.dev/loadout/internal/vault"
@@ -22,7 +23,7 @@ func cmdSync(out, errOut io.Writer) int {
 			problem = true
 			continue
 		}
-		fmt.Fprintf(out, "synced %s (%d linked, %d pruned)\n", a.Name(), len(report.Applied), len(report.Pruned))
+		fmt.Fprintf(out, "synced %s (%d linked, %d pruned)\n", a.Name(), countSkillLinks(report.Applied), len(report.Pruned))
 		for _, b := range report.Blocked {
 			fmt.Fprintf(errOut, "%s: %s\n", a.Name(), b)
 		}
@@ -38,4 +39,17 @@ func cmdSync(out, errOut io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// countSkillLinks counts the entries in an applied list that name a
+// linked skill, not a memory write. Only these entries count as
+// "linked" in the sync summary line.
+func countSkillLinks(applied []string) int {
+	n := 0
+	for _, a := range applied {
+		if strings.HasPrefix(a, "skill/") {
+			n++
+		}
+	}
+	return n
 }

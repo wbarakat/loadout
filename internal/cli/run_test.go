@@ -196,8 +196,8 @@ func TestSyncExitsOneOnBlocked(t *testing.T) {
 	if !strings.Contains(errOut, blockedPath) {
 		t.Fatalf("errOut must name the blocked address, got %q", errOut)
 	}
-	if !strings.Contains(out, "synced pi") {
-		t.Fatalf("sync must still report the pi adapter as synced, got %q", out)
+	if !strings.Contains(out, "synced pi (0 linked, 0 pruned)") {
+		t.Fatalf("sync must report zero linked skills for pi despite the memory write, got %q", out)
 	}
 }
 
