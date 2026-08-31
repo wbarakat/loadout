@@ -84,9 +84,21 @@ func Sync(v *vault.Vault) (Result, error) {
 		if !errors.As(pushErr, &conflict) {
 			return Result{}, pushErr
 		}
-		return pullMergePush(v, client, conflict.Latest, maxMergeRetries)
+		// state.BaseCommit is this device's last confirmed
+		// remote-agreed content — the only base pullMergePush (and
+		// every retry inside it) may ever compare against. See
+		// pullMergePush's own comment for why.
+		state, err := readSyncState(v)
+		if err != nil {
+			return Result{}, err
+		}
+		return pullMergePush(v, client, conflict.Latest, state.BaseCommit, maxMergeRetries)
 	}
-	return pullMergePush(v, client, serverVersion, maxMergeRetries)
+	state, err := readSyncState(v)
+	if err != nil {
+		return Result{}, err
+	}
+	return pullMergePush(v, client, serverVersion, state.BaseCommit, maxMergeRetries)
 }
 
 // push packs the vault's current content and publishes it as a new
@@ -117,7 +129,28 @@ func push(v *vault.Vault, client *Client, parent string) (Result, error) {
 // working tree, snapshots the result, and republishes it, so any
 // local-only content the merge kept reaches the remote too. A further
 // conflict retries against the new latest, up to retriesLeft times.
-func pullMergePush(v *vault.Vault, client *Client, remoteVersion string, retriesLeft int) (Result, error) {
+//
+// baseCommit is fixed for the whole retry chain: it is this device's
+// last CONFIRMED remote-agreed content (the tree recorded the last
+// time a push or a merge actually landed on the server), read once by
+// the caller before the first attempt. Every retry inside this chain
+// compares against that same baseCommit, never against a commit this
+// function's own, not-yet-confirmed merge just produced.
+//
+// This matters because a merge's own output commonly holds content
+// beyond remoteVersion (a kept local addition or edit — exactly the
+// content this whole republish exists to send). If a later retry
+// compared against THAT commit as its base, a file this device kept
+// through the first merge would look "unchanged since base" on the
+// second merge (since the poisoned base already contains it
+// unchanged), and the second merge would then delete it to match
+// whatever the newest incoming snapshot says — a real, silent,
+// permanent loss of a file this device correctly kept moments
+// earlier. Never checkpointing .sync-state.json until a push actually
+// succeeds rules this out: on success, the commit recorded alongside
+// the new version is exactly the tree that version now holds on the
+// server, so it can never disagree with what it is paired with.
+func pullMergePush(v *vault.Vault, client *Client, remoteVersion, baseCommit string, retriesLeft int) (Result, error) {
 	if retriesLeft <= 0 {
 		return Result{}, errors.New("the remote changed too fast. Fix: run loadout sync --remote again.")
 	}
@@ -135,11 +168,7 @@ func pullMergePush(v *vault.Vault, client *Client, remoteVersion string, retries
 		return Result{}, err
 	}
 
-	state, err := readSyncState(v)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := mergeInto(v.Root, tmp, state.BaseCommit); err != nil {
+	if err := mergeInto(v.Root, tmp, baseCommit); err != nil {
 		return Result{}, err
 	}
 	if err := vault.Snapshot(v, fmt.Sprintf("sync from %s", remoteVersion)); err != nil {
@@ -154,7 +183,9 @@ func pullMergePush(v *vault.Vault, client *Client, remoteVersion string, retries
 	// drifting onto different "last synced" versions for no reason,
 	// which would otherwise make an actual same-parent race
 	// (two pushes against one shared parent) impossible to land on
-	// reliably.
+	// reliably. This IS a confirmed outcome (the tree genuinely,
+	// verifiably equals remoteVersion's own content), so it is safe
+	// to checkpoint here.
 	identical, err := treesIdentical(v.Root, tmp)
 	if err != nil {
 		return Result{}, err
@@ -173,18 +204,8 @@ func pullMergePush(v *vault.Vault, client *Client, remoteVersion string, retries
 		return Result{Version: remoteVersion, Merged: true}, nil
 	}
 
-	blobOut, headHash, err := vault.PackSnapshot(v)
+	blobOut, headHashOut, err := vault.PackSnapshot(v)
 	if err != nil {
-		return Result{}, err
-	}
-	// Record the merge as this device's sync state before it even
-	// tries to republish: on any failure below, the device is still
-	// honestly checkpointed at remoteVersion, not left claiming an
-	// older base it has already merged past.
-	if err := SetLastVersion(v, remoteVersion); err != nil {
-		return Result{}, err
-	}
-	if err := writeSyncState(v, syncState{Version: remoteVersion, BaseCommit: headHash}); err != nil {
 		return Result{}, err
 	}
 
@@ -192,14 +213,24 @@ func pullMergePush(v *vault.Vault, client *Client, remoteVersion string, retries
 	if err != nil {
 		var conflict *ConflictError
 		if errors.As(err, &conflict) {
-			return pullMergePush(v, client, conflict.Latest, retriesLeft-1)
+			// Retry against the SAME original baseCommit, not the
+			// merge commit just produced above: see this function's
+			// doc comment. Nothing has been confirmed published yet,
+			// so nothing this device believes about "the last
+			// remote-agreed content" may change.
+			return pullMergePush(v, client, conflict.Latest, baseCommit, retriesLeft-1)
 		}
 		return Result{}, err
 	}
+	// Only now, with a confirmed successful publish, does this
+	// device's belief about "the last remote-agreed content" advance:
+	// headHashOut's synced-set tree is exactly what newVersion now
+	// holds on the server, since that tree is what was just packed
+	// and stored.
 	if err := SetLastVersion(v, newVersion); err != nil {
 		return Result{}, err
 	}
-	if err := writeSyncState(v, syncState{Version: newVersion, BaseCommit: headHash}); err != nil {
+	if err := writeSyncState(v, syncState{Version: newVersion, BaseCommit: headHashOut}); err != nil {
 		return Result{}, err
 	}
 	return Result{Version: newVersion, Pushed: true, Merged: true}, nil
@@ -280,13 +311,18 @@ func statesEqual(a, b fileState) bool {
 // content or the incoming snapshot:
 //   - when the local copy is unchanged since base, the incoming copy
 //     wins (this also propagates a remote deletion: an incoming copy
-//     that does not exist "wins" by removing the local file);
+//     that does not exist "wins" by removing the local file, since an
+//     unchanged local agrees with base, and base had it);
+//   - otherwise (local changed since base) when the incoming copy
+//     does not exist at all, the local copy is kept: an incoming
+//     deletion never overrides a local change, it re-adds the path
+//     upstream, which the next republish propagates;
 //   - otherwise, when the incoming copy is unchanged since base, the
 //     local copy is kept as-is;
-//   - otherwise both sides changed since base: the incoming copy
-//     wins, and the local copy it replaces stays reachable in git
-//     history, since the caller snapshots before this ever runs and
-//     snapshots again right after.
+//   - otherwise both sides changed since base, and both still exist:
+//     the incoming copy wins, and the local copy it replaces stays
+//     reachable in git history, since the caller snapshots before
+//     this ever runs and snapshots again right after.
 func mergeInto(vaultRoot, incomingDir, baseCommit string) error {
 	localPaths, err := listSyncedFiles(vaultRoot)
 	if err != nil {
@@ -315,12 +351,21 @@ func mergeInto(vaultRoot, incomingDir, baseCommit string) error {
 			if err := applyFileState(vaultRoot, rel, incoming); err != nil {
 				return err
 			}
+		case !incoming.exists:
+			// Local changed since base (the case above already ruled
+			// out "unchanged"), and incoming is a deletion: keep
+			// local. An incoming deletion only ever wins over an
+			// unchanged local copy (handled above); it never
+			// overrides a local change, whether that change is a
+			// brand-new local-only addition (base absent too) or an
+			// edit to something the remote deleted (base present).
 		case statesEqual(incoming, base):
 			// Local changed, incoming did not: keep local as-is.
 		default:
-			// Both changed since base, and differently: incoming
-			// wins. When they happen to already agree, this is a
-			// harmless no-op write of identical content.
+			// Both changed since base, both still exist, and
+			// differently: incoming wins. When they happen to already
+			// agree, this is a harmless no-op write of identical
+			// content.
 			if err := applyFileState(vaultRoot, rel, incoming); err != nil {
 				return err
 			}
@@ -427,6 +472,7 @@ func applyFileState(vaultRoot, rel string, st fileState) error {
 		if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		pruneEmptyDirs(vaultRoot, filepath.Dir(full))
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -446,6 +492,28 @@ func applyFileState(vaultRoot, rel string, st fileState) error {
 		mode = 0o644
 	}
 	return os.WriteFile(full, st.content, mode)
+}
+
+// pruneEmptyDirs removes dir, then each now-empty parent above it, in
+// turn, stopping the moment a directory is not empty, is vaultRoot
+// itself, or lies outside vaultRoot. It runs after a deletion
+// propagates, so a skill folder emptied by removing its last file
+// does not linger as a bare directory: doctor would otherwise report
+// it as a skill with no SKILL.md file. skills/ and memory/ themselves
+// always hold a .gitkeep entry (part of the synced content, never
+// removed by a merge), so this never actually reaches vaultRoot in
+// practice; the bound is defense in depth, not load-bearing.
+func pruneEmptyDirs(vaultRoot, dir string) {
+	for dir != vaultRoot && strings.HasPrefix(dir, vaultRoot) {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 // readBaseState reads one path's state at baseCommit, vaultRoot's own
