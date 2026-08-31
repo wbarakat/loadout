@@ -3,6 +3,7 @@ package adapter
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"loadout.dev/loadout/internal/vault"
@@ -124,5 +125,40 @@ func TestFileAdapterEmptySkillsDirSkipsSkills(t *testing.T) {
 	}
 	if ps := a.Check(v); len(ps) != 0 {
 		t.Fatalf("Check must be clean when skills are skipped and memory matches, got %+v", ps)
+	}
+}
+
+// TestCheckReportsOnlyDamageWhenMarksAndLinksBothBroken pins a ruling:
+// damage is a stop-first condition. When the memory file's marks are
+// damaged AND a listed skill has no link, Check must report the
+// damage alone. The damage problem suppresses the others until the
+// user repairs the file — the same way Apply refuses to touch a
+// damaged file at all, so Apply and Check stay symmetric.
+func TestCheckReportsOnlyDamageWhenMarksAndLinksBothBroken(t *testing.T) {
+	v := fileKitTestVault(t)
+	home := t.TempDir()
+	memoryFile := filepath.Join(home, "MEMORY.md")
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, "skills"), // deploy-checks never linked here
+		MemoryFile: memoryFile,
+	}
+	a := newFileAdapter("both-broken", cfg, memoryBlock)
+
+	// Damaged marks: two begin marks before the one end mark.
+	corrupted := "<!-- loadout:begin -->\na\n<!-- loadout:begin -->\nb\n<!-- loadout:end -->\n"
+	if err := os.WriteFile(memoryFile, []byte(corrupted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ps := a.Check(v)
+	if len(ps) != 1 {
+		t.Fatalf("the damage problem must suppress the missing-link problem, got %+v", ps)
+	}
+	if !strings.Contains(ps[0].Detail, "damaged") || !strings.Contains(ps[0].Detail, memoryFile) {
+		t.Fatalf("the sole problem must name the damaged file, got %+v", ps[0])
+	}
+	if !strings.Contains(ps[0].Fix, "repair or remove the marks") {
+		t.Fatalf("the sole problem's fix must point at repairing the marks, got %+v", ps[0])
 	}
 }
