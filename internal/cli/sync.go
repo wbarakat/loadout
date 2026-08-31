@@ -9,7 +9,13 @@ import (
 	"loadout.dev/loadout/internal/vault"
 )
 
-func cmdSync(out, errOut io.Writer) int {
+// syncResult is the JSON shape of "loadout sync".
+type syncResult struct {
+	Reports  []adapter.Report `json:"reports"`
+	Snapshot bool             `json:"snapshot"`
+}
+
+func cmdSync(out, errOut io.Writer, m mode) int {
 	v, err := vault.Open(vault.DefaultRoot())
 	if err != nil {
 		fmt.Fprintln(errOut, err)
@@ -23,6 +29,7 @@ func cmdSync(out, errOut io.Writer) int {
 	}
 	defer release()
 	problem := false
+	reports := []adapter.Report{}
 	for _, a := range adapter.Enabled(v) {
 		report, err := a.Apply(v, false)
 		if err != nil {
@@ -30,7 +37,10 @@ func cmdSync(out, errOut io.Writer) int {
 			problem = true
 			continue
 		}
-		fmt.Fprintf(out, "synced %s (%d linked, %d pruned)\n", a.Name(), countSkillLinks(report.Applied), len(report.Pruned))
+		reports = append(reports, report)
+		if m != modeJSON {
+			fmt.Fprintf(out, "synced %s (%d linked, %d pruned)\n", a.Name(), countSkillLinks(report.Applied), len(report.Pruned))
+		}
 		for _, b := range report.Blocked {
 			fmt.Fprintf(errOut, "%s: %s\n", a.Name(), b)
 		}
@@ -41,6 +51,9 @@ func cmdSync(out, errOut io.Writer) int {
 	if err := vault.Snapshot(v, "sync"); err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1
+	}
+	if m == modeJSON {
+		printJSON(out, syncResult{Reports: reports, Snapshot: true})
 	}
 	if problem {
 		return 1

@@ -11,11 +11,20 @@ import (
 
 const editUsage = "usage: loadout edit <kind>/<name>"
 
+// editJSONError is what "loadout edit --json" prints: edit execs an
+// interactive editor, so it has nothing to marshal as JSON.
+const editJSONError = "edit has no json output. Fix: run edit without --json."
+
 // cmdEdit opens one item's file in $EDITOR, then prints the next
 // step. It falls back to vi when $EDITOR is unset. It exits 1 before
 // it spawns an editor when the address does not parse or the item
-// does not exist, so a missing item never opens an editor.
-func cmdEdit(out, errOut io.Writer, args []string) int {
+// does not exist, so a missing item never opens an editor. It exits 2
+// when called with --json, since edit has no JSON output.
+func cmdEdit(out, errOut io.Writer, args []string, m mode) int {
+	if m == modeJSON {
+		fmt.Fprintln(errOut, editJSONError)
+		return 2
+	}
 	if len(args) != 1 {
 		fmt.Fprintln(errOut, editUsage)
 		return 2

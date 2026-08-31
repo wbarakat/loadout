@@ -18,7 +18,7 @@ const noMatchMessage = "no items match. Fix: run loadout list to see every item.
 // insensitively, and prints the matches in list format. A fact
 // matches on its name, hook, and body; a skill matches on its name
 // and hook only — recall never reads a skill body.
-func cmdRecall(out, errOut io.Writer, args []string) int {
+func cmdRecall(out, errOut io.Writer, args []string, m mode) int {
 	if len(args) == 0 {
 		fmt.Fprintln(errOut, recallUsage)
 		return 2
@@ -59,11 +59,15 @@ func cmdRecall(out, errOut io.Writer, args []string) int {
 		}
 	}
 
+	sortItems(items)
+	if m == modeJSON {
+		printJSON(out, itemsResult{Items: toJSONItems(items)})
+		return 0
+	}
 	if len(items) == 0 {
 		fmt.Fprintln(out, noMatchMessage)
 		return 0
 	}
-	sortItems(items)
 	printItems(out, items)
 	return 0
 }

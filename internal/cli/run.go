@@ -25,40 +25,60 @@ commands:
   review                     list draft items awaiting review
   review keep KIND/NAME      mark a draft item kept
   review drop KIND/NAME      delete a draft item
+  help                       show this message
+
+flags:
+  --json                     print the result as JSON instead of text
 `
 
+// Run dispatches one loadout command. It first strips a "--json"
+// argument found at any position in args, so a verb sees only its own
+// arguments plus a mode flag telling it whether to render JSON.
 func Run(out, errOut io.Writer, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprint(errOut, usage)
 		return 2
 	}
+	args, wantJSON := extractJSON(args)
+	if len(args) == 0 {
+		fmt.Fprint(errOut, usage)
+		return 2
+	}
+	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprint(out, usage)
+		return 0
+	}
+	m := modeText
+	if wantJSON {
+		m = modeJSON
+	}
 	switch args[0] {
 	case "init":
-		return cmdInit(out, errOut)
+		return cmdInit(out, errOut, m)
 	case "add":
-		return cmdAdd(out, errOut, args[1:])
+		return cmdAdd(out, errOut, args[1:], m)
 	case "show":
-		return cmdShow(out, errOut, args[1:])
+		return cmdShow(out, errOut, args[1:], m)
 	case "list":
-		return cmdList(out, errOut)
+		return cmdList(out, errOut, m)
 	case "edit":
-		return cmdEdit(out, errOut, args[1:])
+		return cmdEdit(out, errOut, args[1:], m)
 	case "recall":
-		return cmdRecall(out, errOut, args[1:])
+		return cmdRecall(out, errOut, args[1:], m)
 	case "context":
-		return cmdContext(out, errOut)
+		return cmdContext(out, errOut, m)
 	case "sync":
-		return cmdSync(out, errOut)
+		return cmdSync(out, errOut, m)
 	case "status":
-		return cmdStatus(out, errOut)
+		return cmdStatus(out, errOut, m)
 	case "doctor":
-		return cmdDoctor(out, errOut)
+		return cmdDoctor(out, errOut, m)
 	case "log":
-		return cmdLog(out, errOut)
+		return cmdLog(out, errOut, m)
 	case "undo":
-		return cmdUndo(out, errOut)
+		return cmdUndo(out, errOut, m)
 	case "review":
-		return cmdReview(out, errOut, args[1:])
+		return cmdReview(out, errOut, args[1:], m)
 	default:
 		fmt.Fprintf(errOut, "unknown command %q\n%s", args[0], usage)
 		return 2

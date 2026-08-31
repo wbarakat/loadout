@@ -13,9 +13,34 @@ type listItem struct {
 	kind, name, hook string
 }
 
+// jsonItem is one entry in the JSON shape of "loadout list" and
+// "loadout recall": {items: [{address, hook}]}.
+type jsonItem struct {
+	Address string `json:"address"`
+	Hook    string `json:"hook"`
+}
+
+// itemsResult is the JSON shape of "loadout list" and "loadout
+// recall".
+type itemsResult struct {
+	Items []jsonItem `json:"items"`
+}
+
+// toJSONItems turns list-format items into their JSON shape. address
+// is "<kind>/<name>"; hook is the raw hook string, which may be
+// empty — unlike the text form, it does not carry the "(no
+// description)" placeholder.
+func toJSONItems(items []listItem) []jsonItem {
+	out := make([]jsonItem, 0, len(items))
+	for _, it := range items {
+		out = append(out, jsonItem{Address: it.kind + "/" + it.name, Hook: it.hook})
+	}
+	return out
+}
+
 // cmdList prints every item in the vault, kind then name order, one
 // line each: "<kind>/<name> — <hook>".
-func cmdList(out, errOut io.Writer) int {
+func cmdList(out, errOut io.Writer, m mode) int {
 	v, err := vault.Open(vault.DefaultRoot())
 	if err != nil {
 		fmt.Fprintln(errOut, err)
@@ -40,6 +65,10 @@ func cmdList(out, errOut io.Writer) int {
 		items = append(items, listItem{kind: "memory", name: f.Name, hook: f.Description})
 	}
 	sortItems(items)
+	if m == modeJSON {
+		printJSON(out, itemsResult{Items: toJSONItems(items)})
+		return 0
+	}
 	printItems(out, items)
 	return 0
 }

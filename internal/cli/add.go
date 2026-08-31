@@ -12,7 +12,25 @@ import (
 
 const addUsage = "usage: loadout add skill|memory <name> [--by <who>]"
 
-func cmdAdd(out, errOut io.Writer, args []string) int {
+// addResult is the JSON shape of "loadout add".
+type addResult struct {
+	Address string `json:"address"`
+	Path    string `json:"path"`
+	Review  string `json:"review"`
+}
+
+// reviewFor mirrors vault's own reviewFor: a human write is already
+// reviewed; any other writer starts as a draft. It is duplicated here,
+// rather than exported from vault, since cmdAdd needs it only to
+// report the review state add.go already caused vault to record.
+func reviewFor(by string) string {
+	if by == "human" {
+		return "kept"
+	}
+	return "draft"
+}
+
+func cmdAdd(out, errOut io.Writer, args []string, m mode) int {
 	kind, name, by, ok := parseAddArgs(args)
 	if !ok {
 		fmt.Fprintln(errOut, addUsage)
@@ -48,6 +66,10 @@ func cmdAdd(out, errOut io.Writer, args []string) int {
 		removeItemFile(kind, path)
 		fmt.Fprintln(errOut, err)
 		return 1
+	}
+	if m == modeJSON {
+		printJSON(out, addResult{Address: kind + "/" + name, Path: path, Review: reviewFor(by)})
+		return 0
 	}
 	fmt.Fprintf(out, "created %s\n", path)
 	return 0
