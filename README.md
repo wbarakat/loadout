@@ -24,9 +24,22 @@ Edit the files in ~/.loadout with any editor. Skills reach the tools
 through symlinks, so a skill edit is live at once. After a memory edit,
 run "loadout sync" again.
 
+## Enable more adapters
+
+Some adapters are off by default. The agents-md adapter writes your
+memory and a skills index into any AGENTS.md file you name. To turn
+it on, add this to loadout.toml in the vault:
+
+    [adapters.agents-md]
+    enabled = true
+    targets = ["~/some-project/AGENTS.md"]
+
+List one or more target files under "targets". Run "loadout sync" to
+write the block into each one.
+
 ## How it stays safe
 
 - Loadout writes only inside marked blocks in shared files.
 - Loadout never replaces a real file or directory with a symlink.
-- Every change lands in a local git history inside the vault. Undo with
-  git if you need to.
+- The local git history in the vault records the state at each add
+  and each sync. Undo with git if you need to.

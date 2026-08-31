@@ -89,6 +89,35 @@ func TestSyncProjectsVault(t *testing.T) {
 	}
 }
 
+func TestSyncContinuesAfterAdapterFailure(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "add", "memory", "my-stack")
+
+	home := filepath.Join(base, "home")
+	// A real directory occupies the Claude Code skill link path, so
+	// the claude-code adapter must fail to apply.
+	blockedPath := filepath.Join(home, ".claude", "skills", "deploy-checks")
+	if err := os.MkdirAll(blockedPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := run(t, "sync")
+	if code != 1 {
+		t.Fatalf("sync must exit 1 when an adapter fails, got %d", code)
+	}
+	if !strings.Contains(errOut, "claude-code") {
+		t.Fatalf("sync must report the claude-code failure, got %q", errOut)
+	}
+	if !strings.Contains(out, "synced pi") {
+		t.Fatalf("sync must still sync pi, got %q", out)
+	}
+	if _, err := os.Readlink(filepath.Join(home, ".pi", "agent", "skills", "deploy-checks")); err != nil {
+		t.Fatal("pi must still get its skill link despite the claude-code failure")
+	}
+}
+
 func TestStatusAndDoctor(t *testing.T) {
 	setupEnv(t)
 	run(t, "init")
