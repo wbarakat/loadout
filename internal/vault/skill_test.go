@@ -40,12 +40,40 @@ func TestListSkills(t *testing.T) {
 	if s.Dir != filepath.Join(v.SkillsDir(), "deploy-checks") {
 		t.Fatalf("bad dir: %q", s.Dir)
 	}
+	// A skill written before Task 4 has no provenance frontmatter; the
+	// fields must come back empty, not error.
+	if s.By != "" || s.At != "" || s.Review != "" {
+		t.Fatalf("a skill without provenance frontmatter must parse empty fields: %+v", s)
+	}
 	bad, err := vault.InvalidSkillDirs(v)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(bad) != 1 || filepath.Base(bad[0]) != "broken" {
 		t.Fatalf("bad invalid list: %v", bad)
+	}
+}
+
+func TestListSkillsSurfacesProvenance(t *testing.T) {
+	v := newVault(t)
+	dir := filepath.Join(v.SkillsDir(), "deploy-checks")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: deploy-checks\ndescription: run checks before a deploy\nby: claude-code\nat: 2026-08-31T12:00:00Z\nreview: draft\n---\n\nDo the thing.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("want 1 skill, got %d", len(skills))
+	}
+	s := skills[0]
+	if s.By != "claude-code" || s.At != "2026-08-31T12:00:00Z" || s.Review != "draft" {
+		t.Fatalf("bad provenance: %+v", s)
 	}
 }
 

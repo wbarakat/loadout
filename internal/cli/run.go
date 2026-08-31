@@ -9,12 +9,12 @@ import (
 const usage = `usage: loadout <command>
 
 commands:
-  init            create the vault
-  add skill NAME  add a skill
-  add memory NAME add a memory fact
-  sync            project the vault into every enabled tool
-  status          show the vault and the adapter state
-  doctor          find problems and show the fix for each one
+  init                       create the vault
+  add skill NAME [--by WHO]  add a skill
+  add memory NAME [--by WHO] add a memory fact
+  sync                       project the vault into every enabled tool
+  status                     show the vault and the adapter state
+  doctor                     find problems and show the fix for each one
 `
 
 func Run(out, errOut io.Writer, args []string) int {

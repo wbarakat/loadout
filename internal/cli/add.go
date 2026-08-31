@@ -9,9 +9,12 @@ import (
 	"loadout.dev/loadout/internal/vault"
 )
 
+const addUsage = "usage: loadout add skill|memory <name> [--by <who>]"
+
 func cmdAdd(out, errOut io.Writer, args []string) int {
-	if len(args) != 2 || (args[0] != "skill" && args[0] != "memory") {
-		fmt.Fprintln(errOut, "usage: loadout add skill|memory <name>")
+	kind, name, by, ok := parseAddArgs(args)
+	if !ok {
+		fmt.Fprintln(errOut, addUsage)
 		return 2
 	}
 	v, err := vault.Open(vault.DefaultRoot())
@@ -25,12 +28,11 @@ func cmdAdd(out, errOut io.Writer, args []string) int {
 		return 1
 	}
 	defer release()
-	kind, name := args[0], args[1]
 	var path string
 	if kind == "skill" {
-		path, err = vault.AddSkill(v, name)
+		path, err = vault.AddSkill(v, name, by)
 	} else {
-		path, err = vault.AddFact(v, name)
+		path, err = vault.AddFact(v, name, by)
 	}
 	if err != nil {
 		fmt.Fprintln(errOut, err)
@@ -43,6 +45,31 @@ func cmdAdd(out, errOut io.Writer, args []string) int {
 	}
 	fmt.Fprintf(out, "created %s\n", path)
 	return 0
+}
+
+// parseAddArgs reads "skill|memory <name> [--by <who>]" from args. by
+// defaults to "human" when the flag is absent. ok is false when args
+// does not match this shape, so the caller can print usage.
+func parseAddArgs(args []string) (kind, name, by string, ok bool) {
+	if len(args) < 2 {
+		return "", "", "", false
+	}
+	kind, name = args[0], args[1]
+	if kind != "skill" && kind != "memory" {
+		return "", "", "", false
+	}
+	rest := args[2:]
+	switch len(rest) {
+	case 0:
+		return kind, name, "human", true
+	case 2:
+		if rest[0] != "--by" || rest[1] == "" {
+			return "", "", "", false
+		}
+		return kind, name, rest[1], true
+	default:
+		return "", "", "", false
+	}
 }
 
 // removeScaffold undoes AddSkill or AddFact after a failed snapshot,

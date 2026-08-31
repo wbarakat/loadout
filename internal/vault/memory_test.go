@@ -46,6 +46,30 @@ func TestListFacts(t *testing.T) {
 	if facts[1].Name != "plain" {
 		t.Fatalf("bad fallback name: %q", facts[1].Name)
 	}
+	// A fact written before Task 4 has no provenance frontmatter; the
+	// fields must come back empty, not error.
+	if f.By != "" || f.At != "" || f.Review != "" {
+		t.Fatalf("a fact without provenance frontmatter must parse empty fields: %+v", f)
+	}
+}
+
+func TestListFactsSurfacesProvenance(t *testing.T) {
+	v := newVault(t)
+	fact := "---\nname: my-stack\ndescription: the stack I use\ntype: user\nby: claude-code\nat: 2026-08-31T12:00:00Z\nreview: draft\n---\n\nI use Go and Postgres.\n"
+	if err := os.WriteFile(filepath.Join(v.MemoryDir(), "my-stack.md"), []byte(fact), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 1 {
+		t.Fatalf("want 1 fact, got %d", len(facts))
+	}
+	f := facts[0]
+	if f.By != "claude-code" || f.At != "2026-08-31T12:00:00Z" || f.Review != "draft" {
+		t.Fatalf("bad provenance: %+v", f)
+	}
 }
 
 func TestListFactsHandlesBOMAndCRLF(t *testing.T) {

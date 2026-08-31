@@ -63,6 +63,66 @@ func TestInitAndAdd(t *testing.T) {
 	}
 }
 
+func TestAddByDefaultsToHumanAndIsKept(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	if _, errOut, code := run(t, "add", "memory", "my-stack"); code != 0 {
+		t.Fatalf("add memory failed: %s", errOut)
+	}
+	data, err := os.ReadFile(filepath.Join(base, "vault", "memory", "my-stack.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "by: human") || !strings.Contains(string(data), "review: kept") {
+		t.Fatalf("a default add must be by human and kept, got:\n%s", data)
+	}
+}
+
+func TestAddByFlagRecordsDraftProvenance(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	if _, errOut, code := run(t, "add", "memory", "x", "--by", "pi"); code != 0 {
+		t.Fatalf("add memory failed: %s", errOut)
+	}
+	data, err := os.ReadFile(filepath.Join(base, "vault", "memory", "x.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "by: pi") {
+		t.Fatalf("the file must hold by: pi, got:\n%s", text)
+	}
+	if !strings.Contains(text, "review: draft") {
+		t.Fatalf("a non-human add must start as draft, got:\n%s", text)
+	}
+}
+
+func TestAddByFlagAppliesToSkillsToo(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	if _, errOut, code := run(t, "add", "skill", "deploy-checks", "--by", "pi"); code != 0 {
+		t.Fatalf("add skill failed: %s", errOut)
+	}
+	data, err := os.ReadFile(filepath.Join(base, "vault", "skills", "deploy-checks", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "by: pi") || !strings.Contains(string(data), "review: draft") {
+		t.Fatalf("bad provenance for skill add: %s", data)
+	}
+}
+
+func TestAddByFlagRejectsMalformedFlag(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	if _, errOut, code := run(t, "add", "memory", "x", "--by"); code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("a --by flag without a value must be a usage error, got %d %q", code, errOut)
+	}
+	if _, errOut, code := run(t, "add", "memory", "x", "--nope", "pi"); code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("an unknown flag must be a usage error, got %d %q", code, errOut)
+	}
+}
+
 func TestAddIsTransactionalWhenHistoryFails(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")

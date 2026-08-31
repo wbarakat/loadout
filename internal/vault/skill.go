@@ -10,6 +10,17 @@ type Skill struct {
 	Name        string
 	Description string
 	Dir         string
+	// By names who wrote this skill, for example "human" or
+	// "claude-code". Empty for a skill scaffolded before provenance
+	// tracking existed.
+	By string
+	// At is the RFC3339 time of the write. Empty for a skill
+	// scaffolded before provenance tracking existed.
+	At string
+	// Review is "kept" or "draft". Empty means the same as "kept":
+	// a skill scaffolded before provenance tracking existed has no
+	// review field at all, and must count as already reviewed.
+	Review string
 }
 
 // isSkillDir reports whether entry is a directory, or a symlink that
@@ -44,7 +55,14 @@ func ListSkills(v *Vault) ([]Skill, error) {
 			continue
 		}
 		fields, _ := parseFrontmatter(raw)
-		skills = append(skills, Skill{Name: e.Name(), Description: fields["description"], Dir: dir})
+		skills = append(skills, Skill{
+			Name:        e.Name(),
+			Description: fields["description"],
+			Dir:         dir,
+			By:          fields["by"],
+			At:          fields["at"],
+			Review:      fields["review"],
+		})
 	}
 	return skills, nil
 }

@@ -13,6 +13,17 @@ type Fact struct {
 	Type        string
 	Body        string
 	Path        string
+	// By names who wrote this fact, for example "human" or
+	// "claude-code". Empty for a fact scaffolded before provenance
+	// tracking existed.
+	By string
+	// At is the RFC3339 time of the write. Empty for a fact
+	// scaffolded before provenance tracking existed.
+	At string
+	// Review is "kept" or "draft". Empty means the same as "kept":
+	// a fact scaffolded before provenance tracking existed has no
+	// review field at all, and must count as already reviewed.
+	Review string
 }
 
 // parseFrontmatter splits simple "key: value" frontmatter from the body.
@@ -69,6 +80,9 @@ func ListFacts(v *Vault) ([]Fact, error) {
 			Type:        fields["type"],
 			Body:        body,
 			Path:        path,
+			By:          fields["by"],
+			At:          fields["at"],
+			Review:      fields["review"],
 		})
 	}
 	return facts, nil
