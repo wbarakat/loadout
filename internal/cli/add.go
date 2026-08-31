@@ -19,6 +19,12 @@ func cmdAdd(out, errOut io.Writer, args []string) int {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+	release, err := vault.Lock(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	defer release()
 	kind, name := args[0], args[1]
 	var path string
 	if kind == "skill" {

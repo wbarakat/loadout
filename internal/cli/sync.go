@@ -15,6 +15,12 @@ func cmdSync(out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+	release, err := vault.Lock(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	defer release()
 	problem := false
 	for _, a := range adapter.Enabled(v) {
 		report, err := a.Apply(v, false)
