@@ -185,9 +185,9 @@ The Linear-grade web app with in-browser decryption. Success: full browse, edit,
 ## 13. Recommended stack
 
 - CLI and sync agent: Go. One static binary, low memory use, easy install.
-- API: a small service on Postgres plus S3-compatible blob storage.
+- Sync server: one self-hostable Go binary (`loadoutd`). In self-host mode it stores encrypted blobs on the filesystem with a small local index. The hosted service later runs the same API on Postgres plus S3-compatible storage.
 - Dashboard: Next.js, deployed on Vercel.
-- Crypto: age for file encryption, libsodium for device keys. Do not invent crypto.
+- Crypto: age (X25519) for device identity and blob encryption. Do not invent crypto.
 
 ## 14. Success criteria
 
@@ -216,3 +216,6 @@ The Linear-grade web app with in-browser decryption. Success: full browse, edit,
 8. **(v3) The projection teaches the protocol.** Every projected block carries the write-back footer.
 9. **(v3) Typed adapter reports.** `Apply` returns applied/blocked/pruned; bare error strings are not a contract. Lands in Phase 2, before the adapter wave copies the old shape.
 10. **(v3) Agent interface before adapter wave.** Phase 2 reorders ahead of coverage: the grammar must be right before six more adapters and a cloud service inherit it.
+11. **(v3.1) Self-host first.** Phase 4 ships `loadoutd` as a self-hostable binary and dogfoods Mac-to-Pi sync over Tailscale. Product hosting is a launch decision, not a build decision.
+12. **(v3.1) Lean self-host storage.** v1 `loadoutd` stores encrypted blobs as files with a small local index. Postgres and S3 arrive with the hosted service, behind the same API.
+13. **(v3.1) The manifest splits.** Adapter paths, enabled flags, and device keys are device-local and never sync. Skills, memory, and the device roster sync.
