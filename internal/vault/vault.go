@@ -29,11 +29,13 @@ func Init(root string) (*Vault, error) {
 		}
 	}
 	m := DefaultManifest()
-	if err := SaveManifest(filepath.Join(root, "loadout.toml"), m); err != nil {
+	manifestPath := filepath.Join(root, "loadout.toml")
+	if err := SaveManifest(manifestPath, m); err != nil {
 		return nil, err
 	}
 	v := &Vault{Root: root, Manifest: m}
 	if err := initHistory(v); err != nil {
+		os.Remove(manifestPath)
 		return nil, err
 	}
 	return v, nil

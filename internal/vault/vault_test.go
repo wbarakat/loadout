@@ -64,3 +64,29 @@ func TestSnapshotRecordsChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInitCleansUpOnHistoryFailure(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "vault")
+	// Save original PATH to restore after test.
+	originalPath := os.Getenv("PATH")
+	// Set PATH empty so git cannot be found.
+	t.Setenv("PATH", "")
+	_, err := vault.Init(root)
+	if err == nil {
+		t.Fatal("init must fail when git is not found")
+	}
+	// Verify manifest was cleaned up.
+	if _, err := os.Stat(filepath.Join(root, "loadout.toml")); err == nil {
+		t.Fatal("loadout.toml should be removed on history failure")
+	}
+	// Restore PATH so git can run.
+	os.Setenv("PATH", originalPath)
+	// A retry with git available should succeed.
+	v, err := vault.Init(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v == nil {
+		t.Fatal("init should return vault when it succeeds")
+	}
+}
