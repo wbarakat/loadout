@@ -22,6 +22,9 @@ commands:
   doctor                     find problems and show the fix for each one
   log                        show the vault history
   undo                       revert to the state before the last change
+  review                     list draft items awaiting review
+  review keep KIND/NAME      mark a draft item kept
+  review drop KIND/NAME      delete a draft item
 `
 
 func Run(out, errOut io.Writer, args []string) int {
@@ -54,6 +57,8 @@ func Run(out, errOut io.Writer, args []string) int {
 		return cmdLog(out, errOut)
 	case "undo":
 		return cmdUndo(out, errOut)
+	case "review":
+		return cmdReview(out, errOut, args[1:])
 	default:
 		fmt.Fprintf(errOut, "unknown command %q\n%s", args[0], usage)
 		return 2

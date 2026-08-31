@@ -1,0 +1,171 @@
+package cli
+
+import (
+	"fmt"
+	"io"
+	"sort"
+
+	"loadout.dev/loadout/internal/vault"
+)
+
+const reviewUsage = "usage: loadout review [keep|drop <kind>/<name>]"
+
+// noDraftsMessage is what "loadout review" prints when every item is
+// already reviewed.
+const noDraftsMessage = "no drafts. Every item is kept."
+
+// cmdReview dispatches the three review forms: the bare list, keep,
+// and drop.
+func cmdReview(out, errOut io.Writer, args []string) int {
+	if len(args) == 0 {
+		return cmdReviewList(out, errOut)
+	}
+	switch args[0] {
+	case "keep":
+		return cmdReviewKeep(out, errOut, args[1:])
+	case "drop":
+		return cmdReviewDrop(out, errOut, args[1:])
+	default:
+		fmt.Fprintln(errOut, reviewUsage)
+		return 2
+	}
+}
+
+// draftLine is one row of "loadout review": a list-format line plus
+// the provenance that review needs.
+type draftLine struct {
+	kind, name, hook, by, at string
+}
+
+// cmdReviewList prints every draft item, list format plus by and at.
+func cmdReviewList(out, errOut io.Writer) int {
+	v, err := vault.Open(vault.DefaultRoot())
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	printWarnings(errOut, v)
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+
+	var drafts []draftLine
+	for _, s := range skills {
+		if s.Review == "draft" {
+			drafts = append(drafts, draftLine{kind: "skill", name: s.Name, hook: s.Description, by: s.By, at: s.At})
+		}
+	}
+	for _, f := range facts {
+		if f.Review == "draft" {
+			drafts = append(drafts, draftLine{kind: "memory", name: f.Name, hook: f.Description, by: f.By, at: f.At})
+		}
+	}
+	if len(drafts) == 0 {
+		fmt.Fprintln(out, noDraftsMessage)
+		return 0
+	}
+	sort.Slice(drafts, func(i, j int) bool {
+		if drafts[i].kind != drafts[j].kind {
+			return drafts[i].kind < drafts[j].kind
+		}
+		return drafts[i].name < drafts[j].name
+	})
+	for _, d := range drafts {
+		hook := d.hook
+		if hook == "" {
+			hook = "(no description)"
+		}
+		fmt.Fprintf(out, "%s/%s — %s (by %s, at %s)\n", d.kind, d.name, hook, d.by, d.at)
+	}
+	return 0
+}
+
+// cmdReviewKeep sets an item's review field to kept, under the vault
+// lock, then snapshots the change.
+func cmdReviewKeep(out, errOut io.Writer, args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(errOut, reviewUsage)
+		return 2
+	}
+	addr := args[0]
+	v, err := vault.Open(vault.DefaultRoot())
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	kind, name, err := vault.ParseAddress(addr)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	path, err := vault.ItemPath(v, kind, name)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	release, err := vault.Lock(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	defer release()
+	if err := vault.SetReviewKept(path); err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	if err := vault.Snapshot(v, "review keep "+addr); err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	fmt.Fprintf(out, "kept %s\n", addr)
+	return 0
+}
+
+// cmdReviewDrop deletes an item, under the vault lock, then snapshots
+// the change.
+func cmdReviewDrop(out, errOut io.Writer, args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(errOut, reviewUsage)
+		return 2
+	}
+	addr := args[0]
+	v, err := vault.Open(vault.DefaultRoot())
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	kind, name, err := vault.ParseAddress(addr)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	path, err := vault.ItemPath(v, kind, name)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	release, err := vault.Lock(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	defer release()
+	if err := removeItemFile(kind, path); err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	if err := vault.Snapshot(v, "review drop "+addr); err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	fmt.Fprintf(out, "dropped %s\n", addr)
+	fmt.Fprintln(out, "next: run loadout sync")
+	return 0
+}

@@ -666,6 +666,170 @@ func TestUndoOnFreshVaultErrorsWithFixedMessage(t *testing.T) {
 	}
 }
 
+func TestReviewListsDraftItemsWithByAndAt(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "x", "--by", "pi")
+	run(t, "add", "skill", "deploy-checks") // default human, kept: must not appear
+
+	out, errOut, code := run(t, "review")
+	if code != 0 {
+		t.Fatalf("review failed: %s", errOut)
+	}
+	if strings.Contains(out, "deploy-checks") {
+		t.Fatalf("a kept item must not appear in review, got %q", out)
+	}
+	if !strings.Contains(out, "memory/x") || !strings.Contains(out, "by pi") {
+		t.Fatalf("review must list the draft with its by, got %q", out)
+	}
+	if !strings.Contains(out, "at 20") {
+		t.Fatalf("review must list the draft with its at, got %q", out)
+	}
+}
+
+func TestReviewNoDraftsPrintsFixedMessage(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "x")
+
+	out, errOut, code := run(t, "review")
+	if code != 0 {
+		t.Fatalf("review failed: %s", errOut)
+	}
+	if out != "no drafts. Every item is kept.\n" {
+		t.Fatalf("bad output: %q", out)
+	}
+}
+
+func TestReviewKeepFlipsFieldAndEmptiesTheList(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "x", "--by", "pi")
+
+	_, errOut, code := run(t, "review", "keep", "memory/x")
+	if code != 0 {
+		t.Fatalf("review keep failed: %s", errOut)
+	}
+
+	data, err := os.ReadFile(filepath.Join(base, "vault", "memory", "x.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "review: kept") || strings.Contains(text, "review: draft") {
+		t.Fatalf("review must flip to kept, got:\n%s", text)
+	}
+	if !strings.Contains(text, "by: pi") {
+		t.Fatalf("keep must preserve every other line, got:\n%s", text)
+	}
+
+	out, errOut, code := run(t, "review")
+	if code != 0 {
+		t.Fatalf("review failed: %s", errOut)
+	}
+	if out != "no drafts. Every item is kept.\n" {
+		t.Fatalf("a kept item must leave the draft list empty, got %q", out)
+	}
+
+	logOut, _, _ := run(t, "log")
+	if !strings.Contains(logOut, "review keep memory/x") {
+		t.Fatalf("keep must snapshot, got %q", logOut)
+	}
+}
+
+func TestReviewKeepUnknownAddressExitsOne(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	_, errOut, code := run(t, "review", "keep", "memory/nope")
+	if code != 1 {
+		t.Fatalf("keep of a missing address must exit 1, got %d", code)
+	}
+	want := "memory/nope: no such item. Fix: run loadout list.\n"
+	if errOut != want {
+		t.Fatalf("bad error: got %q want %q", errOut, want)
+	}
+}
+
+func TestReviewDropRemovesSkillFolder(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks", "--by", "pi")
+
+	out, errOut, code := run(t, "review", "drop", "skill/deploy-checks")
+	if code != 0 {
+		t.Fatalf("review drop failed: %s", errOut)
+	}
+	if out != "dropped skill/deploy-checks\nnext: run loadout sync\n" {
+		t.Fatalf("bad output: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(base, "vault", "skills", "deploy-checks")); !os.IsNotExist(err) {
+		t.Fatal("the dropped skill folder must be gone")
+	}
+
+	logOut, _, _ := run(t, "log")
+	if !strings.Contains(logOut, "review drop skill/deploy-checks") {
+		t.Fatalf("drop must snapshot, got %q", logOut)
+	}
+}
+
+func TestReviewDropRemovesFactFile(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "memory", "x", "--by", "pi")
+
+	out, errOut, code := run(t, "review", "drop", "memory/x")
+	if code != 0 {
+		t.Fatalf("review drop failed: %s", errOut)
+	}
+	if out != "dropped memory/x\nnext: run loadout sync\n" {
+		t.Fatalf("bad output: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(base, "vault", "memory", "x.md")); !os.IsNotExist(err) {
+		t.Fatal("the dropped fact file must be gone")
+	}
+}
+
+func TestReviewDropMissingAddressExitsOne(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	_, errOut, code := run(t, "review", "drop", "memory/nope")
+	if code != 1 {
+		t.Fatalf("drop of a missing address must exit 1, got %d", code)
+	}
+	want := "memory/nope: no such item. Fix: run loadout list.\n"
+	if errOut != want {
+		t.Fatalf("bad error: got %q want %q", errOut, want)
+	}
+}
+
+func TestReviewUnknownSubcommandIsUsageError(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	if _, errOut, code := run(t, "review", "bogus"); code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("an unknown review subcommand must be a usage error, got %d %q", code, errOut)
+	}
+	if _, errOut, code := run(t, "review", "keep"); code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("keep without an address must be a usage error, got %d %q", code, errOut)
+	}
+	if _, errOut, code := run(t, "review", "drop"); code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("drop without an address must be a usage error, got %d %q", code, errOut)
+	}
+}
+
+func TestAddByFlagRejectsMalformedValue(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	for _, by := range []string{"pi\nother", "pi\rother", " pi", "pi ", strings.Repeat("a", 65)} {
+		_, errOut, code := run(t, "add", "memory", "x", "--by", by)
+		if code != 2 {
+			t.Fatalf("a bad --by value %q must exit 2, got %d %q", by, code, errOut)
+		}
+		if !strings.Contains(errOut, "Fix:") {
+			t.Fatalf("a bad --by value %q must use the standard error grammar, got %q", by, errOut)
+		}
+	}
+}
+
 func TestDoctorReportsMissingHistory(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")
