@@ -24,6 +24,10 @@ func TestAddSkill(t *testing.T) {
 	if _, err := vault.AddSkill(v, "Bad Name"); err == nil {
 		t.Fatal("bad name must fail")
 	}
+	skills, err := vault.ListSkills(v)
+	if err != nil || len(skills) != 1 || skills[0].Name != "deploy-checks" {
+		t.Fatalf("the new skill must list: %v %v", skills, err)
+	}
 }
 
 func TestAddFact(t *testing.T) {
