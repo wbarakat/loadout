@@ -28,7 +28,7 @@ func (a Pi) Apply(v *vault.Vault, dry bool) (Report, error) {
 		return report, err
 	}
 	memoryFile := vault.ExpandPath(a.Cfg.MemoryFile)
-	content := vault.RenderMemory(facts)
+	content := renderProjection(facts)
 	if dry {
 		if err := checkManagedBlockDamage(memoryFile); err != nil {
 			return report, err
@@ -63,7 +63,7 @@ func (a Pi) Check(v *vault.Vault) []Problem {
 		return append(ps, Problem{a.Name(), err.Error(), "repair the vault memory directory"})
 	}
 	got, ok := ReadManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile))
-	if !ok || got != strings.TrimSpace(vault.RenderMemory(facts)) {
+	if !ok || got != strings.TrimSpace(renderProjection(facts)) {
 		ps = append(ps, Problem{a.Name(), "the memory block is missing or stale", "run: loadout sync"})
 	}
 	return ps

@@ -40,7 +40,7 @@ func (a ClaudeCode) Apply(v *vault.Vault, dry bool) (Report, error) {
 		}
 		report.Applied = append(report.Applied, managedBlockDryMsg(memoryFile, a.memoryImport(v)))
 	} else {
-		if err := writeFileAtomic(renderPath, []byte(vault.RenderMemory(facts))); err != nil {
+		if err := writeFileAtomic(renderPath, []byte(renderProjection(facts))); err != nil {
 			return report, err
 		}
 		if err := WriteManagedBlock(memoryFile, a.memoryImport(v)); err != nil {
@@ -76,7 +76,7 @@ func (a ClaudeCode) Check(v *vault.Vault) []Problem {
 	}
 	renderPath := filepath.Join(v.RenderDir(), "memory.md")
 	data, err := os.ReadFile(renderPath)
-	if err != nil || string(data) != vault.RenderMemory(facts) {
+	if err != nil || string(data) != renderProjection(facts) {
 		ps = append(ps, Problem{a.Name(), "the rendered memory is missing or stale", "run: loadout sync"})
 	}
 	return ps

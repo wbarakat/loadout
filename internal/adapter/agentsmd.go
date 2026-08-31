@@ -31,6 +31,7 @@ func renderAgentsMD(v *vault.Vault) (string, error) {
 	for _, s := range skills {
 		b.WriteString("- " + s.Name + ": " + filepath.Join(s.Dir, "SKILL.md") + " — " + s.Description + "\n")
 	}
+	b.WriteString(ProtocolFooter)
 	return b.String(), nil
 }
 
