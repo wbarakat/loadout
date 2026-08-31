@@ -104,6 +104,38 @@ func TestCursorApplyReportsBlockedSkill(t *testing.T) {
 	}
 }
 
+// TestCursorCheckReportsMemoryFileIgnored proves Check flags a
+// memory_file set on cursor. cursor runs in memoryNone mode and never
+// touches the file; without this, a user who sets memory_file would
+// get no feedback that loadout ignores it.
+func TestCursorCheckReportsMemoryFileIgnored(t *testing.T) {
+	v := testVault(t)
+	home := t.TempDir()
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".cursor", "skills"),
+		MemoryFile: filepath.Join(home, ".cursor", "MEMORY.md"),
+	}
+	a := adapter.Cursor{Cfg: cfg}
+
+	if _, err := a.Apply(v, false); err != nil {
+		t.Fatal(err)
+	}
+
+	ps := a.Check(v)
+	if len(ps) != 1 {
+		t.Fatalf("Check must report exactly the ignored memory_file problem, got %+v", ps)
+	}
+	want := adapter.Problem{
+		Adapter: "cursor",
+		Detail:  "the adapter cursor takes no memory_file; loadout ignores it.",
+		Fix:     "remove adapters.cursor.memory_file, or use the agents-md adapter for extra instruction files.",
+	}
+	if ps[0] != want {
+		t.Fatalf("Check = %+v, want %+v", ps[0], want)
+	}
+}
+
 // TestCursorEnabledInRegistry proves the default manifest ships
 // Cursor disabled, with the plain skills dir and no memory file, and
 // that Enabled() picks it up once turned on.

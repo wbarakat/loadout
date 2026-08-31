@@ -4,10 +4,11 @@ One secure home for your agent gear. Store your skills and your memory
 in one vault. Sync them to every agent tool.
 
 Phase 2 adds the full agent interface: typed reports, the vault lock,
-provenance, review, and `--json` on every verb. Phase 3 adds adapters
-for six local agent tools, plus a generic AGENTS.md adapter. Phase 1
-through Phase 3 are local only. Cloud sync and secrets come next. See
-PLAN.md for the roadmap.
+provenance, review, and `--json` on every verb. Phase 3 adds four
+adapters: codex, gemini, cursor, and hermes. The Adapters section
+below covers all six local tools, plus a generic AGENTS.md adapter.
+Phase 1 through Phase 3 are local only. Cloud sync and secrets come
+next. See PLAN.md for the roadmap.
 
 ## Install
 
@@ -133,6 +134,10 @@ modes:
 | `cursor` | skills only | `~/.cursor/skills` | none | No |
 | `hermes` | skills only | `~/.hermes/skills` | none | No |
 
+Run `loadout sync` while an adapter is still enabled, before you
+disable it. A disabled adapter's links stay in place, and loadout no
+longer watches them.
+
 `codex`, `gemini`, `cursor`, and `hermes` are off by default. Init
 already wrote a stanza for each one in loadout.toml, with the default
 paths above filled in. To turn one on, open loadout.toml and edit the
@@ -146,6 +151,13 @@ existing stanza, for example:
 Set "enabled" to true. Do not add a second `[adapters.codex]` section.
 Edit the section that is already there. Run "loadout sync" to write
 the projection.
+
+A vault made before this version has no stanza for codex, gemini,
+cursor, or hermes. In that case, add the whole section shown above to
+loadout.toml. Loadout ignores an adapter name that is not in the
+manifest, so the adapter cannot turn on until you add its stanza. When
+the stanza already exists, edit it in place; the warning above still
+stands, so never add a second one.
 
 ### The agents-md adapter
 

@@ -153,12 +153,22 @@ func (a fileAdapter) Apply(v *vault.Vault, dry bool) (Report, error) {
 // skill links and scans for orphans.
 //
 // A mode other than memoryNone needs a memory_file in the manifest;
-// an empty one is the same config error Apply reports. An empty
-// SkillsDir skips the skills check entirely.
+// an empty one is the same config error Apply reports. memoryNone
+// ignores its memory_file, if any, but reports it as a Problem: the
+// setting looks live but Apply never touches it. An empty SkillsDir
+// skips the skills check entirely.
 func (a fileAdapter) Check(v *vault.Vault) []Problem {
 	var ps []Problem
 
-	if a.mode != memoryNone {
+	if a.mode == memoryNone {
+		if a.cfg.MemoryFile != "" {
+			ps = append(ps, Problem{
+				a.name,
+				fmt.Sprintf("the adapter %s takes no memory_file; loadout ignores it.", a.name),
+				fmt.Sprintf("remove adapters.%s.memory_file, or use the agents-md adapter for extra instruction files.", a.name),
+			})
+		}
+	} else {
 		memoryFile := vault.ExpandPath(a.cfg.MemoryFile)
 		if memoryFile == "" {
 			return append(ps, Problem{a.name, a.memoryFileMissingDetail(), a.memoryFileMissingFix()})

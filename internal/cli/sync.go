@@ -64,7 +64,11 @@ func cmdSync(out, errOut io.Writer, args []string, m mode) int {
 		reports = append(reports, report)
 		if m != modeJSON {
 			if dry {
-				fmt.Fprintf(out, "would sync %s (%d to link, %d to prune; memory: %s)\n", a.Name(), report.Linked, len(report.Pruned), memoryStatus(report.Applied))
+				line := fmt.Sprintf("would sync %s (%d to link, %d to prune", a.Name(), report.Linked, len(report.Pruned))
+				if status := memoryStatus(report.Applied); status != "" {
+					line += "; memory: " + status
+				}
+				fmt.Fprintln(out, line+")")
 			} else {
 				fmt.Fprintf(out, "synced %s (%d linked, %d pruned)\n", a.Name(), report.Linked, len(report.Pruned))
 			}
@@ -95,9 +99,10 @@ func cmdSync(out, errOut io.Writer, args []string, m mode) int {
 
 // memoryStatus finds the one applied entry that reports the memory
 // block's status ("up to date" or "block would change") and returns
-// just that status word, for the dry summary line. Every adapter's
-// Apply call appends exactly one such entry, so this always finds
-// one in practice; it returns "" only if that ever stops holding.
+// just that status word, for the dry summary line. A memoryBlock or
+// memoryImport adapter's Apply call appends exactly one such entry. A
+// memoryNone adapter appends none, so this returns "" for it, and the
+// dry summary line then carries no memory clause at all.
 func memoryStatus(applied []string) string {
 	const prefix = "memory: "
 	for _, a := range applied {

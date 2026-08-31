@@ -35,7 +35,9 @@ func fileKitTestVault(t *testing.T) *vault.Vault {
 
 // TestFileAdapterMemoryNoneSkipsMemory proves memoryNone skips memory
 // entirely: it writes no managed block and no render file, even when
-// MemoryFile is set, and it still links skills.
+// MemoryFile is set, and it still links skills. Check still surfaces
+// the set-but-ignored MemoryFile as a Problem, so the user learns
+// loadout never acts on it.
 func TestFileAdapterMemoryNoneSkipsMemory(t *testing.T) {
 	v := fileKitTestVault(t)
 	home := t.TempDir()
@@ -59,8 +61,17 @@ func TestFileAdapterMemoryNoneSkipsMemory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(v.RenderDir(), "memory.md")); !os.IsNotExist(err) {
 		t.Fatal("memoryNone must not write a render file")
 	}
-	if ps := a.Check(v); len(ps) != 0 {
-		t.Fatalf("Check must report no memory problems under memoryNone, got %+v", ps)
+	ps := a.Check(v)
+	if len(ps) != 1 {
+		t.Fatalf("Check must report the ignored MemoryFile and nothing else, got %+v", ps)
+	}
+	want := Problem{
+		Adapter: "skills-only",
+		Detail:  "the adapter skills-only takes no memory_file; loadout ignores it.",
+		Fix:     "remove adapters.skills-only.memory_file, or use the agents-md adapter for extra instruction files.",
+	}
+	if ps[0] != want {
+		t.Fatalf("Check = %+v, want %+v", ps[0], want)
 	}
 }
 

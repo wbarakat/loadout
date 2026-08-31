@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"loadout.dev/loadout/internal/cli"
+	"loadout.dev/loadout/internal/vault"
 )
 
 // run points the vault and the home at temp dirs, then runs the CLI.
@@ -313,6 +314,31 @@ func TestSyncDryRunFlagAcceptedInAnyPosition(t *testing.T) {
 	}
 }
 
+// TestSyncDryRunMemoryNoneAdapterOmitsMemoryClause proves a memoryNone
+// adapter's dry line carries no dangling "; memory: " clause: cursor
+// never reports a memory status, so the line must read exactly
+// "would sync cursor (N to link, M to prune)", with no clause at all.
+func TestSyncDryRunMemoryNoneAdapterOmitsMemoryClause(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	setAdapterConfig(t, base, "cursor", vault.AdapterConfig{
+		Enabled:   true,
+		SkillsDir: "~/.cursor/skills",
+	})
+
+	out, errOut, code := run(t, "sync", "--dry-run")
+	if code != 0 {
+		t.Fatalf("sync --dry-run failed: %s", errOut)
+	}
+	if !strings.Contains(out, "would sync cursor (1 to link, 0 to prune)\n") {
+		t.Fatalf("a memoryNone adapter's dry line must omit the memory clause, got %q", out)
+	}
+	if strings.Contains(out, "would sync cursor (1 to link, 0 to prune;") {
+		t.Fatalf("a memoryNone adapter's dry line must carry no memory clause at all, got %q", out)
+	}
+}
+
 func TestSyncLinksSymlinkedSkillDir(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")
@@ -438,6 +464,31 @@ func TestDoctorReportsEmbeddedGitRepo(t *testing.T) {
 	}
 }
 
+// TestDoctorReportsMemoryFileIgnoredOnMemoryNoneAdapter proves doctor
+// surfaces a memory_file set on a memoryNone adapter such as cursor:
+// otherwise loadout would silently ignore a setting the user expects
+// to take effect.
+func TestDoctorReportsMemoryFileIgnoredOnMemoryNoneAdapter(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	setAdapterConfig(t, base, "cursor", vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  "~/.cursor/skills",
+		MemoryFile: "~/.cursor/MEMORY.md",
+	})
+
+	out, _, code := run(t, "doctor")
+	if code != 1 {
+		t.Fatalf("doctor must report a problem, got %d", code)
+	}
+	if !strings.Contains(out, "the adapter cursor takes no memory_file; loadout ignores it.") {
+		t.Fatalf("doctor must name the ignored memory_file, got %q", out)
+	}
+	if !strings.Contains(out, "remove adapters.cursor.memory_file, or use the agents-md adapter for extra instruction files.") {
+		t.Fatalf("doctor must print the fix, got %q", out)
+	}
+}
+
 // TestDoctorReportsStaleLinkAfterSkillDeleted proves the orphan scan:
 // deleting a skill folder after a sync leaves its symlink behind in
 // every adapter's skills directory, and doctor must now catch that —
@@ -476,6 +527,21 @@ func appendManifestKey(t *testing.T, base, line string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, append(data, []byte(line)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setAdapterConfig overwrites one adapter's config in the vault
+// manifest, so a test can enable an adapter beyond init's defaults.
+func setAdapterConfig(t *testing.T, base, name string, cfg vault.AdapterConfig) {
+	t.Helper()
+	root := filepath.Join(base, "vault")
+	v, err := vault.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Manifest.Adapters[name] = cfg
+	if err := vault.SaveManifest(filepath.Join(root, "loadout.toml"), v.Manifest); err != nil {
 		t.Fatal(err)
 	}
 }
