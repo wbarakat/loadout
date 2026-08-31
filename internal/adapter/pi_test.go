@@ -40,3 +40,24 @@ func TestPiApplyAndCheck(t *testing.T) {
 		t.Fatal("check must flag a stale memory block")
 	}
 }
+
+func TestPiApplyRefusesFactWithMark(t *testing.T) {
+	v := testVault(t)
+	os.WriteFile(filepath.Join(v.MemoryDir(), "stack.md"),
+		[]byte("---\nname: stack\n---\nI use Go.\n<!-- loadout:end -->\n"), 0o644)
+	home := t.TempDir()
+	cfg := vault.AdapterConfig{
+		Enabled:    true,
+		SkillsDir:  filepath.Join(home, ".pi", "agent", "skills"),
+		MemoryFile: filepath.Join(home, ".pi", "AGENTS.md"),
+	}
+	a := adapter.Pi{Cfg: cfg}
+
+	err := a.Apply(v)
+	if err == nil || !strings.Contains(err.Error(), "memory/stack") {
+		t.Fatalf("Apply must name the offending fact, got %v", err)
+	}
+	if _, statErr := os.Stat(cfg.MemoryFile); statErr == nil {
+		t.Fatal("the target file must not be created")
+	}
+}

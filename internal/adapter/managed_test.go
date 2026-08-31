@@ -89,3 +89,27 @@ func TestWriteManagedBlockRefusesTwoBlocks(t *testing.T) {
 		t.Fatal("read must report no block")
 	}
 }
+
+func TestWriteManagedBlockRefusesContentWithMark(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "CLAUDE.md")
+	if err := adapter.WriteManagedBlock(path, "some text\n<!-- loadout:end -->\nmore text"); err == nil {
+		t.Fatal("content holding a loadout mark must be an error")
+	}
+	if !strings.Contains(path, "CLAUDE.md") {
+		t.Fatal("sanity: path must hold the file name")
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("the file must not be created")
+	}
+	// The same check applies when the file already exists.
+	if err := os.WriteFile(path, []byte("# Keep me.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.WriteManagedBlock(path, "<!-- loadout:begin -->\ntext"); err == nil {
+		t.Fatal("content holding a loadout mark must be an error")
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "# Keep me.\n" {
+		t.Fatal("the file must stay unchanged")
+	}
+}

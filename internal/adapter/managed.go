@@ -21,7 +21,11 @@ const (
 // the marks are damaged, return an error and do not write. Never modify
 // text outside the marks.
 func WriteManagedBlock(path, content string) error {
-	block := beginMark + "\n" + strings.TrimSpace(content) + "\n" + endMark
+	trimmed := strings.TrimSpace(content)
+	if strings.Contains(trimmed, beginMark) || strings.Contains(trimmed, endMark) {
+		return fmt.Errorf("the content for %s holds a loadout mark: remove the mark text from the source item", path)
+	}
+	block := beginMark + "\n" + trimmed + "\n" + endMark
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

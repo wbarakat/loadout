@@ -31,6 +31,9 @@ func (a Pi) Apply(v *vault.Vault) error {
 	if err != nil {
 		return err
 	}
+	if err := scanForMarks(facts, skills); err != nil {
+		return err
+	}
 	return WriteManagedBlock(vault.ExpandPath(a.Cfg.MemoryFile), vault.RenderMemory(facts))
 }
 

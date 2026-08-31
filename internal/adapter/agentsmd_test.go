@@ -1,6 +1,7 @@
 package adapter_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,6 +31,22 @@ func TestAgentsMDApply(t *testing.T) {
 	}
 	if ps := a.Check(v); len(ps) != 0 {
 		t.Fatalf("check must be clean after apply: %+v", ps)
+	}
+}
+
+func TestAgentsMDApplyRefusesFactWithMark(t *testing.T) {
+	v := testVault(t)
+	os.WriteFile(filepath.Join(v.MemoryDir(), "stack.md"),
+		[]byte("---\nname: stack\n---\nI use Go.\n<!-- loadout:begin -->\n"), 0o644)
+	target := filepath.Join(t.TempDir(), "proj", "AGENTS.md")
+	a := adapter.AgentsMD{Cfg: vault.AdapterConfig{Enabled: true, Targets: []string{target}}}
+
+	err := a.Apply(v)
+	if err == nil || !strings.Contains(err.Error(), "memory/stack") {
+		t.Fatalf("Apply must name the offending fact, got %v", err)
+	}
+	if _, statErr := os.Stat(target); statErr == nil {
+		t.Fatal("the target file must not be created")
 	}
 }
 

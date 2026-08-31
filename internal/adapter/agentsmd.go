@@ -35,6 +35,17 @@ func renderAgentsMD(v *vault.Vault) (string, error) {
 }
 
 func (a AgentsMD) Apply(v *vault.Vault) error {
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		return err
+	}
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		return err
+	}
+	if err := scanForMarks(facts, skills); err != nil {
+		return err
+	}
 	content, err := renderAgentsMD(v)
 	if err != nil {
 		return err
