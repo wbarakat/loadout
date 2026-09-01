@@ -336,6 +336,9 @@ func TestHTTPRequestTraversalSecretNameRefused(t *testing.T) {
 	if !strings.Contains(text, "not a valid secret name") {
 		t.Fatalf("bad refusal message: %q", text)
 	}
+	if strings.Contains(text, brokerDummyValue) {
+		t.Fatalf("the refusal leaked the dummy value: %q", text)
+	}
 	if atomic.LoadInt32(hits) != 0 {
 		t.Fatal("a traversal secret name must never reach the outbound server")
 	}
@@ -373,6 +376,9 @@ func TestHTTPRequestUnknownOrEmptySecretNameRefused(t *testing.T) {
 			}
 			if !strings.Contains(text, c.wantMsg) {
 				t.Fatalf("want message containing %q, got %q", c.wantMsg, text)
+			}
+			if strings.Contains(text, brokerDummyValue) {
+				t.Fatalf("the refusal leaked the dummy value: %q", text)
 			}
 			if atomic.LoadInt32(hits) != 0 {
 				t.Fatal("must never reach the outbound server")
