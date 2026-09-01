@@ -122,6 +122,43 @@ func TestHTTPRequestSubstitutesSecretIntoAllowedHost(t *testing.T) {
 	}
 }
 
+// TestHTTPRequestScrubsSecretReflectedInResponse proves the second
+// half of INVARIANT 10's extension: an allow-listed host is trusted
+// with the secret, but if it reflects the value back — an echoed
+// header, an error body quoting it — the tool result must never hand
+// that value to the agent. Every exact occurrence is replaced with
+// "[redacted-by-loadout]" instead.
+func TestHTTPRequestScrubsSecretReflectedInResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Echoed-Auth", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"error":"bad credential: ` + r.Header.Get("Authorization") + `"}`))
+	}))
+	defer server.Close()
+
+	v := newBrokerVault(t, []string{hostOf(t, server.URL)})
+	args := toJSON(t, brokerArgs{
+		Method:  "GET",
+		URL:     server.URL,
+		Headers: map[string]string{"Authorization": "Bearer {{secret:api-key}}"},
+	})
+	text, isError := callTool(t, v, "http_request", args)
+	if isError {
+		t.Fatalf("http_request returned isError true: %s", text)
+	}
+	if strings.Contains(text, brokerDummyValue) {
+		t.Fatalf("the tool result must never hand the reflected dummy value back to the agent: %s", text)
+	}
+	if !strings.Contains(text, "[redacted-by-loadout]") {
+		t.Fatalf("the tool result must show the redaction placeholder in place of the reflected value, got: %s", text)
+	}
+	// Both the reflected header AND the reflected body occurrence must
+	// be scrubbed — not just one of the two.
+	if strings.Count(text, "[redacted-by-loadout]") < 2 {
+		t.Fatalf("want the placeholder in both the echoed header and the echoed body, got: %s", text)
+	}
+}
+
 // TestHTTPRequestEmptyAllowedHostsRefused proves the fail-closed
 // default: a secret with no allowed_hosts is refused before anything
 // is decrypted or sent — the outbound server never even sees a
@@ -292,14 +329,31 @@ func TestHTTPRequestAccessLogRecordsHostNotValue(t *testing.T) {
 	if !strings.Contains(logText, `"secret":"api-key"`) {
 		t.Fatalf("access log missing the secret name: %s", logText)
 	}
-	if !strings.Contains(logText, host) {
-		t.Fatalf("access log missing the host: %s", logText)
-	}
 	if strings.Contains(logText, brokerDummyValue) {
 		t.Fatalf("access log leaked the dummy value: %s", logText)
 	}
 	if strings.Contains(logText, "/some/path") {
 		t.Fatalf("access log must never carry the full url, only the host: %s", logText)
+	}
+
+	lines := strings.Split(strings.TrimSpace(logText), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("want exactly 1 access-log line, got %d: %q", len(lines), logText)
+	}
+	var entry struct {
+		Verb   string `json:"verb"`
+		Secret string `json:"secret"`
+		Host   string `json:"host"`
+		Tool   string `json:"tool"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("access-log line did not parse: %v", err)
+	}
+	if entry.Host != host {
+		t.Fatalf("entry.Host = %q, want %q — the host must land in the dedicated Host field", entry.Host, host)
+	}
+	if entry.Tool != "" {
+		t.Fatalf("entry.Tool = %q, want empty: a broker entry must not overload Tool with the host", entry.Tool)
 	}
 }
 

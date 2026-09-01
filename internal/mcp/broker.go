@@ -33,6 +33,15 @@ const maxBrokerResponseBody = 4 << 20 // 4 MiB
 // be used to choose or rewrite the host a request is sent to.
 const secretPlaceholderOpen = "{{secret:"
 
+// redactedPlaceholder replaces an exact occurrence of a substituted
+// secret's value found in the OUTBOUND server's response (see
+// scrubResponse). An allow-listed host is trusted with the secret it
+// was sent, but the agent reading the tool result is not: a host that
+// echoes a header back (some APIs reflect Authorization in an error
+// body, for example) must never hand the value straight back to the
+// agent that never saw it in the first place.
+const redactedPlaceholder = "[redacted-by-loadout]"
+
 // secretRefPattern finds every "{{secret:<name>}}" placeholder in a
 // header value or the body. The captured name is validated with
 // vault.ValidateSecretName before it is ever used to look up a
@@ -91,13 +100,23 @@ type brokerResponse struct {
 //     can never smuggle another, unpermitted one along for the ride.
 //  3. Only once every referenced secret permits this exact host is
 //     each one decrypted and substituted into the header values and
-//     the body; the plaintext is zeroed immediately after, the same
-//     way AddSecret and DecryptSecret's own callers zero theirs.
+//     the body; the plaintext stays alive only long enough to build
+//     the request, log the access, send it, and scrub the response
+//     (step 5) — it is zeroed right after, the same way AddSecret and
+//     DecryptSecret's own callers zero theirs.
 //  4. The request is sent with a client that refuses to follow a
-//     redirect to a different host (see refuseCrossHostRedirect), so
-//     a 3xx response can never cause the secret to be re-sent
-//     elsewhere.
-//  5. One access-log entry per secret used is appended — verb
+//     redirect to a different host, or to a less secure scheme on the
+//     same host (see refuseUnsafeRedirect), so a 3xx response can
+//     never cause the secret to be re-sent elsewhere, or re-sent in
+//     cleartext.
+//  5. The OUTBOUND SERVER's response is scrubbed (scrubResponse)
+//     before it is returned: every exact occurrence of a secret value
+//     substituted this call is replaced with "[redacted-by-loadout]"
+//     in the response headers and body. An allow-listed host is fully
+//     trusted with the secret; the agent reading the tool result is
+//     not — this catches a host that reflects the credential back
+//     (an echoed Authorization header, an error body quoting it).
+//  6. One access-log entry per secret used is appended — verb
 //     "broker", the secret's name, and the request's HOST (never the
 //     full URL, never the value) — before the request is sent, the
 //     same "log once the secret has really been used" rule cmdRun
@@ -107,7 +126,9 @@ func httpRequestTool(v *vault.Vault) Tool {
 		Name: "http_request",
 		Description: "Send an HTTP request, substituting {{secret:<name>}} placeholders in header values or the body with a secret's " +
 			"decrypted value. Refuses unless the secret's allowed_hosts permits the request's exact host. Never a placeholder in the url. " +
-			"Returns the outbound server's response; never the secret's value.",
+			"Returns the outbound server's response, scrubbed of any secret value it echoed back; never the secret's value itself. " +
+			"An allowed host is fully trusted with the secret and anything it returns. Allow-list only endpoints you trust not to leak or " +
+			"reflect the credential.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{` +
 			`"method":{"type":"string","description":"HTTP method, for example GET or POST"},` +
 			`"url":{"type":"string","description":"the request url; must not contain a {{secret:...}} placeholder"},` +
@@ -151,6 +172,11 @@ func runHTTPRequest(v *vault.Vault, args json.RawMessage) (ToolResult, error) {
 	}
 	host := u.Host
 
+	// Only header VALUES and the body are scanned for a placeholder —
+	// never header NAMES. A name is never a place an agent would put
+	// one anyway, and Go's own http.Header rejects a "{" or "}" in a
+	// header name outright, so a placeholder hiding there could never
+	// be sent as a real header in the first place.
 	texts := make([]string, 0, len(a.Headers)+1)
 	for _, hv := range a.Headers {
 		texts = append(texts, hv)
@@ -161,7 +187,7 @@ func runHTTPRequest(v *vault.Vault, args json.RawMessage) (ToolResult, error) {
 		return ToolResult{Text: err.Error(), IsError: true}, nil
 	}
 	if len(names) == 0 {
-		return sendBrokeredRequest(method, a.URL, a.Headers, a.Body)
+		return sendBrokeredRequest(method, a.URL, a.Headers, a.Body, nil)
 	}
 
 	// Fail closed: every referenced secret must permit this EXACT
@@ -169,7 +195,10 @@ func runHTTPRequest(v *vault.Vault, args json.RawMessage) (ToolResult, error) {
 	for _, name := range names {
 		meta, err := vault.SecretMeta(v, name)
 		if err != nil {
-			return ToolResult{Text: fmt.Sprintf("secret/%s: %v", name, err), IsError: true}, nil
+			// err is already a fully formed, name-only message (see
+			// vault.SecretMeta) — re-wrapping it here would double the
+			// "secret/<name>:" prefix.
+			return ToolResult{Text: err.Error(), IsError: true}, nil
 		}
 		if len(meta.AllowedHosts) == 0 {
 			return ToolResult{Text: fmt.Sprintf("secret/%s: no allowed_hosts configured. Fix: run loadout secret rotate %s --allowed-hosts <host>.", name, name), IsError: true}, nil
@@ -179,12 +208,15 @@ func runHTTPRequest(v *vault.Vault, args json.RawMessage) (ToolResult, error) {
 		}
 	}
 
-	// Every referenced secret permits this host: decrypt each,
-	// substitute into the header values and body, and zero every
-	// plaintext right away — the request from here on carries only
-	// the substituted strings, the same accepted, documented exposure
-	// AddSecret and cmdRun already carry for a decrypted value folded
-	// into an immutable Go string.
+	// Every referenced secret permits this host: decrypt each and
+	// substitute into the header values and body. plaintexts stays
+	// alive a little longer than the request itself — through
+	// sendBrokeredRequest, so its response can be scrubbed of any
+	// value the outbound host reflected back — and is zeroed right
+	// after, on every path (see the defer, and the explicit call
+	// below), the same accepted, documented exposure AddSecret and
+	// cmdRun already carry for a decrypted value folded into an
+	// immutable Go string.
 	plaintexts := make(map[string][]byte, len(names))
 	defer zeroPlaintexts(plaintexts)
 	for _, name := range names {
@@ -200,7 +232,6 @@ func runHTTPRequest(v *vault.Vault, args json.RawMessage) (ToolResult, error) {
 		headers[k] = substitutePlaceholders(hv, plaintexts)
 	}
 	body := substitutePlaceholders(a.Body, plaintexts)
-	zeroPlaintexts(plaintexts)
 
 	// One access-log entry per secret used, naming only the HOST —
 	// never the full url, never the value — written before the
@@ -208,12 +239,14 @@ func runHTTPRequest(v *vault.Vault, args json.RawMessage) (ToolResult, error) {
 	// really been used" rule for "loadout run".
 	at := time.Now().UTC().Format(time.RFC3339)
 	for _, name := range names {
-		if err := vault.AppendAccessLog(v, vault.AccessEntry{At: at, Verb: "broker", Secret: name, Tool: host}); err != nil {
+		if err := vault.AppendAccessLog(v, vault.AccessEntry{At: at, Verb: "broker", Secret: name, Host: host}); err != nil {
 			return ToolResult{Text: "the access log could not be written; the request was not sent.", IsError: true}, nil
 		}
 	}
 
-	return sendBrokeredRequest(method, a.URL, headers, body)
+	result, sendErr := sendBrokeredRequest(method, a.URL, headers, body, plaintexts)
+	zeroPlaintexts(plaintexts)
+	return result, sendErr
 }
 
 // zeroPlaintexts zeroes every plaintext byte slice in plaintexts.
@@ -280,19 +313,30 @@ func substitutePlaceholders(text string, plaintexts map[string][]byte) string {
 	})
 }
 
-// refuseCrossHostRedirect is an http.Client CheckRedirect policy that
-// refuses to follow a redirect to a different host than the request
-// STARTED at (via[0], the original request) — so a 3xx response
-// pointing at another host never causes a secret already folded into
-// this request's headers or body to be resent there. Returning
-// http.ErrUseLastResponse tells the Client to stop and hand back the
-// 3xx response itself, with no error and no further request ever
-// built or sent.
-func refuseCrossHostRedirect(req *http.Request, via []*http.Request) error {
+// refuseUnsafeRedirect is an http.Client CheckRedirect policy that
+// refuses two shapes of redirect relative to the request the chain
+// STARTED at (via[0], the original request):
+//
+//   - a different HOST — so a 3xx response pointing at another host
+//     never causes a secret already folded into this request's
+//     headers or body to be resent there;
+//   - the SAME host but a less secure SCHEME (https origin → http
+//     target) — so an allow-listed https endpoint can never
+//     downgrade the connection and have the secret re-sent in
+//     cleartext.
+//
+// Returning http.ErrUseLastResponse tells the Client to stop and hand
+// back the 3xx response itself, with no error and no further request
+// ever built or sent.
+func refuseUnsafeRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) == 0 {
 		return nil
 	}
-	if !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+	orig := via[0].URL
+	if !strings.EqualFold(req.URL.Host, orig.Host) {
+		return http.ErrUseLastResponse
+	}
+	if strings.EqualFold(orig.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
 		return http.ErrUseLastResponse
 	}
 	if len(via) >= 10 {
@@ -301,13 +345,36 @@ func refuseCrossHostRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
+// scrubResponse replaces every exact occurrence of a substituted
+// secret's plaintext value, found anywhere in resp's headers or body,
+// with redactedPlaceholder. An allow-listed host is fully trusted
+// with the secret; the agent reading the tool result is not — this
+// catches a host that reflects the credential back (an echoed
+// Authorization header, an error body quoting it) before the result
+// is ever handed to the agent.
+func scrubResponse(resp *brokerResponse, plaintexts map[string][]byte) {
+	for _, val := range plaintexts {
+		if len(val) == 0 {
+			continue
+		}
+		s := string(val)
+		resp.Body = strings.ReplaceAll(resp.Body, s, redactedPlaceholder)
+		for k, values := range resp.Headers {
+			for i, v := range values {
+				values[i] = strings.ReplaceAll(v, s, redactedPlaceholder)
+			}
+			resp.Headers[k] = values
+		}
+	}
+}
+
 // sendBrokeredRequest builds and sends the OUTBOUND request — with
 // every "{{secret:<name>}}" placeholder already substituted by the
-// caller — and returns the outbound server's response as the tool
-// result. It never sees a secret name or plaintext itself, only the
-// final header/body strings, so it cannot leak either even by
-// accident.
-func sendBrokeredRequest(method, rawURL string, headers map[string]string, body string) (ToolResult, error) {
+// caller — and returns the outbound server's response, scrubbed
+// (scrubResponse) of any substituted value the plaintexts map holds,
+// as the tool result. plaintexts is read-only here: the caller still
+// owns zeroing it once this returns.
+func sendBrokeredRequest(method, rawURL string, headers map[string]string, body string, plaintexts map[string][]byte) (ToolResult, error) {
 	req, err := http.NewRequest(method, rawURL, strings.NewReader(body))
 	if err != nil {
 		return ToolResult{Text: "the request could not be built: " + err.Error(), IsError: true}, nil
@@ -316,7 +383,7 @@ func sendBrokeredRequest(method, rawURL string, headers map[string]string, body 
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: brokerTimeout, CheckRedirect: refuseCrossHostRedirect}
+	client := &http.Client{Timeout: brokerTimeout, CheckRedirect: refuseUnsafeRedirect}
 	resp, err := client.Do(req)
 	if err != nil {
 		return ToolResult{Text: "the request failed: " + err.Error(), IsError: true}, nil
@@ -324,7 +391,10 @@ func sendBrokeredRequest(method, rawURL string, headers map[string]string, body 
 	defer resp.Body.Close()
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxBrokerResponseBody))
 
-	data, err := json.Marshal(brokerResponse{Status: resp.StatusCode, Headers: resp.Header, Body: string(bodyBytes)})
+	result := brokerResponse{Status: resp.StatusCode, Headers: resp.Header, Body: string(bodyBytes)}
+	scrubResponse(&result, plaintexts)
+
+	data, err := json.Marshal(result)
 	if err != nil {
 		return ToolResult{}, err
 	}

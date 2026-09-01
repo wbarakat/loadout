@@ -10,17 +10,17 @@ import (
 // secret use. It NEVER holds the secret value (INVARIANT 10) — only
 // who read what, and when.
 //
-// Tool usually names who or what made the access (for example
-// "human" or "claude-code"). The brokered http_request MCP tool
-// (internal/mcp/broker.go) reuses this same field for the HOST a
-// secret's value was sent to, since a "broker" entry has no separate
-// place to put it and a host is exactly as safe to log as a tool
-// name — never the value, never the full URL.
+// Tool names who or what made the access (for example "human" or
+// "claude-code"). Host is set only by the brokered http_request MCP
+// tool (internal/mcp/broker.go): the exact host a secret's value was
+// sent to — never the full url, never the value. It is empty for
+// every other verb (show, rotate, run).
 type AccessEntry struct {
 	At     string `json:"at"`
 	Verb   string `json:"verb"`
 	Secret string `json:"secret"`
 	Tool   string `json:"tool"`
+	Host   string `json:"host,omitempty"`
 }
 
 // accessLogPath returns the path to the vault's access log: a
