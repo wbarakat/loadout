@@ -188,6 +188,8 @@ The MCP server (`loadout mcp`) speaks JSON-RPC over stdio — an agent tool spaw
 **Phase 7 — Connectors for hosted agents.**
 Push items to hosted agents such as Devin over their APIs. Success: a vault edit reaches a hosted agent with no manual step.
 
+Security note carried from Phase 6: the local `http_request` broker allows a request with no `{{secret:}}` placeholder to reach any host (a general fetch). This is safe for the local stdio server, which runs as the user. A hosted broker must gate it — block private, link-local, and cloud-metadata address ranges (SSRF), or require an allowlist for every request. Also: the response scrub catches only a verbatim reflected secret; a host that transforms the secret (base64, url-encode) bypasses it, so the allowlist stays the real trust boundary. Query-param secrets and JSON-RPC batches are unsupported.
+
 **Phase 8 — Dashboard.**
 The Linear-grade web app with in-browser decryption. Success: full browse, edit, review, and audit from the browser.
 
