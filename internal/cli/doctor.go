@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"loadout.dev/loadout/internal/adapter"
@@ -39,8 +40,25 @@ type doctorResult struct {
 // no human or tool ever asked for). Every plaintext DecryptSecret
 // hands back is zeroed immediately: doctor never needs the value,
 // only whether the decrypt succeeded.
+//
+// A NO-SECRETS device skips this probe entirely (Important finding,
+// 2026-09-01 whole-branch fix wave): such a device is EXPECTED to be
+// unable to read any secret — that is what the role means, not a
+// problem. Probing it anyway used to report every secret as "cannot
+// read it", with a fix that said to run "loadout devices approve
+// <name>" — which, if actually followed, PROMOTES the device back to
+// full, the exact opposite of what a no-secrets device wants. So this
+// checks this device's own role first, and reports nothing about
+// secret readability at all when it is no-secrets.
 func checkSecretReadability(v *vault.Vault, secrets []vault.Secret) ([]doctorProblem, error) {
 	if len(secrets) == 0 {
+		return nil, nil
+	}
+	role, err := vault.SelfRole(v)
+	if err != nil {
+		return nil, err
+	}
+	if role == vault.RoleNoSecrets {
 		return nil, nil
 	}
 	deviceName, _, err := vault.DeviceIdentity(v)
@@ -61,6 +79,39 @@ func checkSecretReadability(v *vault.Vault, secrets []vault.Secret) ([]doctorPro
 		for i := range value {
 			value[i] = 0
 		}
+	}
+	return problems, nil
+}
+
+// checkUnrecognizedRoles flags any devices.toml entry whose RAW,
+// on-disk role is neither absent nor a recognized role ("full" or
+// "no-secrets") — a typo, or a hand-edited manifest. normalizeRole
+// already fails closed on such a value (vault.ReadRosterEntries reads
+// it as RoleNoSecrets, so a typo can never leak a secret to a device
+// nobody meant to grant it to), but that silent fallback would
+// otherwise hide the mistake forever: the operator who typed "admin"
+// meaning "full" never finds out their device is actually no-secrets.
+func checkUnrecognizedRoles(v *vault.Vault) ([]doctorProblem, error) {
+	entries, err := vault.ReadRosterEntries(v)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var problems []doctorProblem
+	for _, name := range names {
+		raw := entries[name].RawRole
+		if !vault.UnrecognizedRole(raw) {
+			continue
+		}
+		problems = append(problems, doctorProblem{
+			Source: "vault",
+			Detail: fmt.Sprintf("device %s has an unknown role %s in the manifest; loadout treats it as no-secrets", name, raw),
+			Fix:    "set the role to full or no-secrets.",
+		})
 	}
 	return problems, nil
 }
@@ -139,6 +190,12 @@ func cmdDoctor(out, errOut io.Writer, m mode) int {
 	}
 	problems = append(problems, secretProblems...)
 	problems = append(problems, checkSecretRotation(secrets)...)
+	roleProblems, err := checkUnrecognizedRoles(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	problems = append(problems, roleProblems...)
 	for _, a := range adapter.Enabled(v) {
 		for _, p := range a.Check(v) {
 			problems = append(problems, doctorProblem{Source: p.Adapter, Detail: p.Detail, Fix: p.Fix})

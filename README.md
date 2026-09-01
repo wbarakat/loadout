@@ -502,11 +502,23 @@ Run `loadout devices` to see each device's role next to its state:
     device-a — approved (full)
     device-b — approved (no-secrets)
 
-**The guarantee**: loadout never encrypts a secret's value to a
-no-secrets device's key. This is not a check the device honors on
-its own — the encryption itself excludes it. A no-secrets device
-that tries to decrypt a secret fails every time, with no way around
-it short of an admin approving it as full.
+**The guarantee**: loadout never encrypts a secret's value, going
+forward, to a no-secrets device's key. This is not a check the
+device honors on its own. The encryption itself excludes it. A
+freshly approved no-secrets device was never a recipient of any
+secret. It can never decrypt one. There is no way around this,
+short of an admin approving it as full.
+
+A device demoted from full is different. It may still hold an old
+`value.age` file from before the demotion. This old file still
+decrypts with the device's key. The demotion does not erase this
+old file. A role-affecting sync now re-encrypts secrets
+automatically. A full device does this each time it merges a role
+change. It re-encrypts every secret to the current roster. This
+closes the gap on its own, usually on the next sync. The live
+guarantee holds once this re-encryption reaches every full device,
+and the demoted device syncs again. It is not live the instant you
+run the demote command.
 
 ### Keep every machine in sync automatically
 

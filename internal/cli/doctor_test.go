@@ -181,3 +181,194 @@ func TestDoctorSilentForSecretWithNoRotateAfter(t *testing.T) {
 		t.Fatalf("doctor must report all good, got %q", out)
 	}
 }
+
+// demoteSelfToNoSecrets makes v's own device the roster's no-secrets
+// entry, adding a distinct full device (otherIdentity's) alongside it
+// so the vault keeps a full recipient to protect its secrets, then
+// re-encrypts and snapshots — the on-disk shape a real
+// "devices approve <self> --no-secrets" from another device would
+// leave behind, built directly since these tests run a single vault
+// with no remote.
+func demoteSelfToNoSecrets(t *testing.T, v *vault.Vault) {
+	t.Helper()
+	name, recipient, err := vault.DeviceIdentity(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherIdentity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "other-device", otherIdentity.Recipient().String(), vault.RoleFull); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, name, recipient, vault.RoleNoSecrets); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.ReEncryptSecrets(v); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Snapshot(v, "demote self to no-secrets"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDoctorSkipsSecretReadabilityForNoSecretsDevice proves the
+// foot-gun fix: on a no-secrets device, doctor must never report a
+// secret as "this device cannot read it" with a fix that says to
+// approve itself — following that fix would PROMOTE the device to
+// full, the opposite of what a no-secrets device wants. A no-secrets
+// device being unable to read a secret is expected, not a problem.
+func TestDoctorSkipsSecretReadabilityForNoSecretsDevice(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	// A local sync projects memory into the enabled adapters, so
+	// doctor's own adapter checks (unrelated to this test) stay quiet
+	// too — mirrors TestDoctorSilentWhenEveryReadableSecretDecrypts.
+	run(t, "sync")
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai"); code != 0 {
+		t.Fatalf("secret add failed: %s", errOut)
+	}
+
+	v, err := vault.Open(filepath.Join(base, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	demoteSelfToNoSecrets(t, v)
+
+	// Precondition: this device genuinely cannot decrypt the secret
+	// any more.
+	if _, err := vault.DecryptSecret(v, "openai-key"); err == nil {
+		t.Fatal("test setup error: a no-secrets device must not be able to decrypt the secret")
+	}
+
+	out, errOut, code := run(t, "doctor")
+	if code != 0 {
+		t.Fatalf("doctor on a no-secrets device with nothing else wrong must report all good, got %d: out=%q err=%q", code, out, errOut)
+	}
+	if strings.Contains(out, "cannot read it") {
+		t.Fatalf("doctor must never flag a no-secrets device's own inability to read a secret, got %q", out)
+	}
+	if strings.Contains(out, "devices approve") {
+		t.Fatalf("doctor must never suggest promoting a no-secrets device via devices approve, got %q", out)
+	}
+	if !strings.Contains(out, "all good") {
+		t.Fatalf("doctor must report all good, got %q", out)
+	}
+}
+
+// TestDoctorNoSecretsDeviceStillReportsOtherProblems proves the skip
+// is scoped to secret readability only: a no-secrets device with a
+// genuine, unrelated problem (a stale skill link here) must still see
+// it, and doctor must still exit 1.
+func TestDoctorNoSecretsDeviceStillReportsOtherProblems(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "sync")
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai"); code != 0 {
+		t.Fatalf("secret add failed: %s", errOut)
+	}
+
+	v, err := vault.Open(filepath.Join(base, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	demoteSelfToNoSecrets(t, v)
+
+	if err := os.RemoveAll(filepath.Join(base, "vault", "skills", "deploy-checks")); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := run(t, "doctor")
+	if code != 1 {
+		t.Fatalf("doctor must still report the stale link, got %d", code)
+	}
+	if !strings.Contains(out, "stale link") {
+		t.Fatalf("doctor must still report the stale link, got %q", out)
+	}
+	if strings.Contains(out, "cannot read it") || strings.Contains(out, "openai-key") {
+		t.Fatalf("doctor must not mention the secret at all for a no-secrets device, got %q", out)
+	}
+}
+
+// TestDoctorFlagsUnrecognizedRole proves the promised warning: a
+// devices.toml entry whose role is neither "full" nor "no-secrets"
+// (nor absent) is flagged by doctor, even though normalizeRole
+// silently treats it as no-secrets under the hood.
+func TestDoctorFlagsUnrecognizedRole(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+
+	v, err := vault.Open(filepath.Join(base, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// devices.toml is hand-written here, not through AddToRoster:
+	// AddToRoster's own validateRoleForWrite refuses "admin" outright,
+	// so this reproduces a HAND-EDITED manifest — exactly the case
+	// this check exists to catch.
+	path := filepath.Join(base, "vault", "devices.toml")
+	content := fmt.Sprintf("[devices.weird-device]\n  recipient = %q\n  role = \"admin\"\n", identity.Recipient().String())
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Snapshot(v, "hand-edit devices.toml with an unknown role"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := run(t, "doctor")
+	if code != 1 {
+		t.Fatalf("doctor must flag the unknown role, got %d", code)
+	}
+	want := "device weird-device has an unknown role admin in the manifest; loadout treats it as no-secrets"
+	if !strings.Contains(out, want) {
+		t.Fatalf("doctor must flag the unknown role, got %q", out)
+	}
+	if !strings.Contains(out, "fix: set the role to full or no-secrets.") {
+		t.Fatalf("doctor must carry the fix, got %q", out)
+	}
+}
+
+// TestDoctorSilentOnRecognizedRoles proves the negative case: a
+// devices.toml with only "full", "no-secrets", and absent roles never
+// trips the unrecognized-role check.
+func TestDoctorSilentOnRecognizedRoles(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	run(t, "sync")
+
+	v, err := vault.Open(filepath.Join(base, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, recipient, err := vault.DeviceIdentity(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, name, recipient, vault.RoleFull); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "other-device", other.Recipient().String(), vault.RoleNoSecrets); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Snapshot(v, "add a full and a no-secrets device"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := run(t, "doctor")
+	if code != 0 {
+		t.Fatalf("doctor must stay quiet for only recognized roles, got %d: %q", code, out)
+	}
+	if !strings.Contains(out, "all good") {
+		t.Fatalf("doctor must report all good, got %q", out)
+	}
+}
