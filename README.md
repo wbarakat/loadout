@@ -284,3 +284,7 @@ finishes its current beat, prints "watch stopped.", and exits.
 holds a device's private key, and never sees a skill or a memory fact
 in the clear. Only a device listed in the vault's own `devices.toml`
 can decrypt what the server holds.
+
+See PLAN.md section 11 for the v1 trust boundary: a snapshot is
+encrypted, but not signed, so a bearer-token holder can push content
+that enrolled devices will merge.

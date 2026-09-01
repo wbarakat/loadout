@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"filippo.io/age"
@@ -695,6 +696,171 @@ func TestDevicesRotateClosesEvictedDeviceReplayAttack(t *testing.T) {
 	useDeviceEnv(t, baseBReinstalled)
 	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
 		t.Fatalf("the newly-rotated-in device must be able to sync, got %d: %s", code, errOut)
+	}
+}
+
+// onceOnLatestGET wraps a real server handler, running trigger exactly
+// once — synchronously, before the request is forwarded to inner — the
+// first time it sees a GET /v1/snapshots/latest request after arm is
+// called. It lets a test land a competing server-side change at the
+// exact instant a device's remote.Sync asks the remote for its latest
+// version, deterministically, with no goroutines or races: the
+// request's own goroutine runs trigger and blocks on it before the
+// real handler (which reads the store fresh) ever runs.
+type onceOnLatestGET struct {
+	inner http.Handler
+	mu    sync.Mutex
+	armed bool
+	fired bool
+	fn    func()
+}
+
+func (h *onceOnLatestGET) arm(fn func()) {
+	h.mu.Lock()
+	h.armed = true
+	h.fired = false
+	h.fn = fn
+	h.mu.Unlock()
+}
+
+func (h *onceOnLatestGET) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	fire := h.armed && !h.fired && r.Method == http.MethodGet && r.URL.Path == "/v1/snapshots/latest"
+	if fire {
+		h.fired = true
+	}
+	trigger := h.fn
+	h.mu.Unlock()
+	if fire && trigger != nil {
+		trigger()
+	}
+	h.inner.ServeHTTP(w, r)
+}
+
+// pushCompetingRoster seeds the store directly with a snapshot holding
+// exactly roster as devices.toml, built on top of parent — bypassing
+// any device's own vault entirely, the way a concurrent admin action
+// on a totally different waiting device would land a competing
+// devices.toml on the remote. It returns the new version.
+func pushCompetingRoster(t *testing.T, store *server.Store, parent string, roster map[string]string) string {
+	t.Helper()
+	v, err := vault.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, recipient := range roster {
+		if err := vault.AddToRoster(v, name, recipient); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := vault.Snapshot(v, "competing roster"); err != nil {
+		t.Fatal(err)
+	}
+	blob, _, err := vault.PackSnapshot(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := store.PutSnapshot(parent, blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return version
+}
+
+// TestDevicesApproveReportsOverrideWhenConcurrentSyncDropsIt proves
+// Important 2: devices.toml is one file, merged whole under
+// last-write-wins. If a concurrent sync's incoming devices.toml
+// differs from this approval's own local one (both changed since
+// their shared base), the merge picks the incoming file entirely,
+// silently dropping this approval — even though remote.Sync itself
+// reports no error (a real, confirmed merge, just not the outcome the
+// admin asked for). "devices approve" must catch this by re-reading
+// the roster after its own remote.Sync, and refuse to report success
+// when the just-approved name did not survive.
+func TestDevicesApproveReportsOverrideWhenConcurrentSyncDropsIt(t *testing.T) {
+	store, err := server.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := store.Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := server.New(store, token, log.New(io.Discard, "", 0))
+	handler := &onceOnLatestGET{inner: srv.Handler()}
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	baseA := newDeviceEnv(t)
+	useDeviceEnv(t, baseA)
+	run(t, "init")
+	writeDeviceName(t, baseA, "device-a")
+	run(t, "remote", "add", ts.URL, token)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("bootstrap sync on A failed: %s", errOut)
+	}
+	vA, err := vault.Open(filepath.Join(baseA, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aName, aRecipient, err := vault.DeviceIdentity(vA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	baseB := newDeviceEnv(t)
+	useDeviceEnv(t, baseB)
+	run(t, "init")
+	writeDeviceName(t, baseB, "device-b")
+	if _, errOut, code := run(t, "join", ts.URL, token); code != 0 {
+		t.Fatalf("join B failed: %s", errOut)
+	}
+
+	competingIdentity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	competingRecipient := competingIdentity.Recipient().String()
+
+	// Arm the handler: the instant A's approve-triggered sync asks the
+	// remote for its latest version, a competing admin action lands
+	// first — a devices.toml that approves a totally DIFFERENT device,
+	// never mentioning device-b at all.
+	handler.arm(func() {
+		info, err := store.Latest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pushCompetingRoster(t, store, info.Version, map[string]string{
+			aName:      aRecipient,
+			"device-x": competingRecipient,
+		})
+	})
+
+	useDeviceEnv(t, baseA)
+	out, errOut, code := run(t, "devices", "approve", "device-b")
+	if code != 1 {
+		t.Fatalf("an approval overridden by a concurrent sync must exit 1, not report false success, got %d (out=%q err=%q)", code, out, errOut)
+	}
+	want := "the approval of device-b was overridden by a concurrent sync. Fix: run loadout devices approve device-b again.\n"
+	if errOut != want {
+		t.Fatalf("bad error: got %q want %q", errOut, want)
+	}
+	if strings.Contains(out, "approved device-b") {
+		t.Fatal("must never print success for an approval a concurrent sync silently dropped")
+	}
+
+	// The roster on disk really does miss device-b: this is not a
+	// false alarm.
+	roster, err := vault.ReadRoster(vA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := roster["device-b"]; ok {
+		t.Fatal("test setup error: device-b's approval should have been overridden by the competing roster")
+	}
+	if _, ok := roster["device-x"]; !ok {
+		t.Fatal("test setup error: the competing roster should have won the merge")
 	}
 }
 

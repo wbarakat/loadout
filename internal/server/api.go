@@ -86,6 +86,18 @@ type deviceRequest struct {
 	Recipient string `json:"recipient"`
 }
 
+// maxSnapshotBytes caps how large a single snapshot body may be. A
+// snapshot is one full encrypted blob of a whole vault's skills and
+// memory, so this is generous, but an unbounded body is still a
+// resource-exhaustion risk — fatal on a small self-hosted disk (the
+// Pi's SD card, say).
+const maxSnapshotBytes = 64 << 20 // 64 MiB
+
+// maxDeviceUpsertBytes caps a device-upsert body: a name and an age
+// recipient, both short fixed-shape strings, never need anywhere
+// close to this much room.
+const maxDeviceUpsertBytes = 64 << 10 // 64 KiB
+
 // ageX25519RecipientPattern matches the shape every age X25519
 // recipient string has: the bech32 human-readable part "age1",
 // followed by exactly 58 characters from bech32's own 32-character
@@ -106,8 +118,20 @@ type deviceRequest struct {
 var ageX25519RecipientPattern = regexp.MustCompile(`^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$`)
 
 func (s *Server) handleUpsertDevice(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxDeviceUpsertBytes)
 	var req deviceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Recipient == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "the request body exceeds the maximum allowed size")
+			s.log(r, http.StatusRequestEntityTooLarge, "", 0)
+			return
+		}
+		writeJSONError(w, http.StatusBadRequest, "name and recipient are required")
+		s.log(r, http.StatusBadRequest, "", 0)
+		return
+	}
+	if req.Name == "" || req.Recipient == "" {
 		writeJSONError(w, http.StatusBadRequest, "name and recipient are required")
 		s.log(r, http.StatusBadRequest, "", 0)
 		return
@@ -145,8 +169,15 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePostSnapshot(w http.ResponseWriter, r *http.Request) {
 	parent := r.Header.Get("X-Loadout-Parent")
+	r.Body = http.MaxBytesReader(w, r.Body, maxSnapshotBytes)
 	blob, err := io.ReadAll(r.Body)
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "the snapshot exceeds the maximum allowed size")
+			s.log(r, http.StatusRequestEntityTooLarge, "", 0)
+			return
+		}
 		writeJSONError(w, http.StatusBadRequest, "the request body cannot be read")
 		s.log(r, http.StatusBadRequest, "", 0)
 		return

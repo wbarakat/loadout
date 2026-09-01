@@ -116,9 +116,10 @@ func headHash(v *Vault) (string, error) {
 
 // HeadHash returns the vault's current git HEAD commit hash: the
 // same identifier PackSnapshot pins a snapshot to. loadout watch
-// calls this before and after a beat to notice whether the vault's
-// tracked content actually changed, so a beat with nothing new stays
-// silent.
+// calls this once per beat and carries the result forward as the next
+// beat's baseline (not a within-beat before/after), so a beat can
+// tell whether the vault's tracked content changed since the last
+// beat it announced, and stay silent when it did not.
 func HeadHash(v *Vault) (string, error) {
 	return headHash(v)
 }
@@ -325,10 +326,24 @@ func safeJoin(dir, name string) (string, error) {
 
 // safeSymlinkTarget reports whether a symlink at entryPath (already
 // resolved inside dir) pointing at linkname would still resolve
-// inside dir. An absolute linkname is refused outright; a relative
+// inside dir, AND inside the SyncedSet (skills/, memory/,
+// devices.toml). An absolute linkname is refused outright; a relative
 // one is resolved against the symlink's own directory before the
-// check, so a target that stays inside dir via a "../sibling" hop is
-// still accepted.
+// check, so a target that stays inside the synced set via a
+// "../sibling" hop is still accepted.
+//
+// The synced-set check matters beyond the plain inside-dir check: dir
+// is only ever a throwaway render/sync-pull-* directory, not the real
+// vault, but mergeInto later recreates every accepted symlink,
+// verbatim, at the SAME relative path inside the real vault root. A
+// symlink that resolves inside dir but outside the synced set — say
+// skills/x/link -> ../../device.key, still comfortably inside dir —
+// would therefore land pointing at the real vault's own device.key
+// once merged in, ready to be followed (and its content leaked) by
+// anything that later projects skills/ into an adapter's harness. An
+// enrolled device can encrypt and push arbitrary content, so this
+// must be refused here, not trusted to whatever reads the symlink
+// later.
 func safeSymlinkTarget(entryPath, dir, linkname string) error {
 	if linkname == "" || filepath.IsAbs(filepath.FromSlash(linkname)) {
 		return errors.New("unsafe symlink target")
@@ -338,7 +353,23 @@ func safeSymlinkTarget(entryPath, dir, linkname string) error {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return errors.New("unsafe symlink target")
 	}
+	if !withinSyncedSet(rel) {
+		return errors.New("unsafe symlink target")
+	}
 	return nil
+}
+
+// withinSyncedSet reports whether rel — a slash-agnostic path already
+// confirmed to resolve inside the unpack root — falls within one of
+// the vault's synced paths: skills/, memory/, or devices.toml itself.
+func withinSyncedSet(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	for _, entry := range SyncedSet() {
+		if rel == entry || strings.HasPrefix(rel, entry+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // hasSymlinkComponent reports whether any already-existing directory

@@ -12,17 +12,23 @@ import (
 )
 
 // TestServerPackageNeverImportsAge proves invariant 8 at the
-// dependency level: the server package (and everything it pulls in)
-// has no path to filippo.io/age, so no code in this package can ever
-// call age.Decrypt or age.Encrypt on a stored blob.
+// dependency level: the server package and the loadoutd binary built
+// from it (and everything either pulls in) have no path to
+// filippo.io/age, so no code that runs as the sync server can ever
+// call age.Decrypt or age.Encrypt on a stored blob. cmd/loadoutd is
+// checked too, not just internal/server: the binary is what an
+// operator actually runs, and pinning only the library package would
+// miss an age import added directly in main.go.
 func TestServerPackageNeverImportsAge(t *testing.T) {
-	out, err := exec.Command("go", "list", "-f", "{{join .Deps \"\\n\"}}", "loadout.dev/loadout/internal/server").CombinedOutput()
-	if err != nil {
-		t.Fatalf("go list failed: %v\n%s", err, out)
-	}
-	for _, dep := range strings.Split(string(out), "\n") {
-		if dep == "filippo.io/age" {
-			t.Fatal("internal/server must never depend on filippo.io/age: invariant 8 requires the server to never decrypt a blob")
+	for _, pkg := range []string{"loadout.dev/loadout/internal/server", "loadout.dev/loadout/cmd/loadoutd"} {
+		out, err := exec.Command("go", "list", "-f", "{{join .Deps \"\\n\"}}", pkg).CombinedOutput()
+		if err != nil {
+			t.Fatalf("go list %s failed: %v\n%s", pkg, err, out)
+		}
+		for _, dep := range strings.Split(string(out), "\n") {
+			if dep == "filippo.io/age" {
+				t.Fatalf("%s must never depend on filippo.io/age: invariant 8 requires the server to never decrypt a blob", pkg)
+			}
 		}
 	}
 }

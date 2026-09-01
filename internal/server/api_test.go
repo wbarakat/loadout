@@ -153,6 +153,26 @@ func TestDeviceUpsertRejectsInvalidRecipient(t *testing.T) {
 	}
 }
 
+// TestDeviceUpsertRejectsOversizedBodyWith413 proves Minor 5: the
+// device-upsert body is capped, so a caller (malicious or just buggy)
+// sending an oversized body gets a clean 413, never an unbounded
+// server-side read.
+func TestDeviceUpsertRejectsOversizedBodyWith413(t *testing.T) {
+	ts, token := newTestServer(t)
+	// Valid JSON, just oversized: proves the cap trips mid-decode, not
+	// merely on a syntax error the decoder would have caught first.
+	longName := strings.Repeat("a", maxDeviceUpsertBytes)
+	oversized, err := json.Marshal(map[string]string{"name": longName, "recipient": "age1fla00xc80e2tg3dq6x7wj9mkksj3p46ahu5jxjklxapxc2xryv7smtwcf9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := doReq(t, http.MethodPost, ts.URL+"/v1/devices", token, bytes.NewReader(oversized), nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", resp.StatusCode)
+	}
+}
+
 func TestPostSnapshotEmptyParentStoresAndReturnsVersion(t *testing.T) {
 	ts, token := newTestServer(t)
 	resp := doReq(t, http.MethodPost, ts.URL+"/v1/snapshots", token, bytes.NewBufferString("blob-bytes"), map[string]string{"X-Loadout-Parent": ""})
@@ -202,6 +222,32 @@ func TestPostSnapshotStaleParentGives409WithLatest(t *testing.T) {
 	}
 	if conflict.Latest != second.Version {
 		t.Fatalf("expected conflict.latest %q, got %q", second.Version, conflict.Latest)
+	}
+}
+
+// TestPostSnapshotRejectsOversizedBodyWith413 proves Minor 5: an
+// unbounded snapshot body is a resource-exhaustion risk on the Pi's
+// small disk and memory. A body over the cap must be refused with a
+// clean 413, and never actually get stored.
+func TestPostSnapshotRejectsOversizedBodyWith413(t *testing.T) {
+	ts, token := newTestServer(t)
+	oversized := bytes.Repeat([]byte("a"), maxSnapshotBytes+1)
+	resp := doReq(t, http.MethodPost, ts.URL+"/v1/snapshots", token, bytes.NewReader(oversized), map[string]string{"X-Loadout-Parent": ""})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", resp.StatusCode)
+	}
+
+	latestResp := doReq(t, http.MethodGet, ts.URL+"/v1/snapshots/latest", token, nil, nil)
+	defer latestResp.Body.Close()
+	var latest struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(latestResp.Body).Decode(&latest); err != nil {
+		t.Fatal(err)
+	}
+	if latest.Version != "" {
+		t.Fatalf("a rejected oversized snapshot must never be stored, got latest %q", latest.Version)
 	}
 }
 

@@ -206,8 +206,8 @@ func runWatchBeat(v *vault.Vault, out, errOut io.Writer, m mode, lastHead, lastV
 		pruned += len(r.Pruned)
 	}
 
-	if shouldPrint, line := beatChangeSince(lastHead, currentHead, lastVersion, res.Version, linked, pruned); shouldPrint {
-		printWatchBeatLine(out, m, line, currentHead != lastHead, res.Version, linked, pruned)
+	if shouldPrint, line := beatChangeSince(lastHead, currentHead, res.Version, linked, pruned); shouldPrint {
+		printWatchBeatLine(out, m, line, currentHead != lastHead, res, len(reports), linked, pruned)
 	}
 
 	return beatRan, currentHead, res.Version, nil
@@ -215,30 +215,31 @@ func runWatchBeat(v *vault.Vault, out, errOut io.Writer, m mode, lastHead, lastV
 
 // beatChangeSince decides whether a beat is worth announcing, and
 // what to say, by comparing this beat's outcome against the state as
-// of the last beat that WAS announced (lastHead, lastVersion) —
-// never just this one beat's own before/after. A beat that only
-// compared its own within-beat before/after would miss a change a
-// SEPARATE loadout command (add, edit, review keep/drop, undo)
-// committed between two beats: syncLocal and remote.Sync still
-// notice that change and push it on the very next beat, but that
-// beat's own head never moves during its own execution, since the
-// commit already happened before the beat started. Comparing against
-// the cross-beat baseline instead catches it: currentHead already
-// differs from lastHead the moment such a beat runs, so it prints.
+// of the last beat that WAS announced (lastHead) — never just this
+// one beat's own before/after. A beat that only compared its own
+// within-beat before/after would miss a change a SEPARATE loadout
+// command (add, edit, review keep/drop, undo) committed between two
+// beats: syncLocal and remote.Sync still notice that change and push
+// it on the very next beat, but that beat's own head never moves
+// during its own execution, since the commit already happened before
+// the beat started. Comparing against the cross-beat baseline instead
+// catches it: currentHead already differs from lastHead the moment
+// such a beat runs, so it prints.
 //
-// lastVersion is accepted, and currentVersion is reported in the
-// message, but neither is ever compared to decide shouldPrint:
-// internal/remote's Sync mints a brand-new version string on every
-// successful call even when nothing in the vault changed at all
-// (push() republishes whenever this device is already caught up —
-// Task 5's own, unmodified behavior). Treating a bare version
-// difference as "changed" would make every idle beat look like news,
-// defeating "silent when nothing changed." currentHead, which only
-// moves when git actually finds a real diff to commit, is the
-// reliable signal; linked/pruned catch a projection-only change (a
-// symlink relinked after something outside the vault deleted it)
-// that never touches the vault's own history at all.
-func beatChangeSince(lastHead, currentHead, lastVersion, currentVersion string, linked, pruned int) (shouldPrint bool, line string) {
+// currentVersion is reported in the message, but never compared to
+// decide shouldPrint: a bare version difference must never count as
+// "changed" on its own, or an idle beat could look like news. (Before
+// the idle-republish fix, internal/remote's Sync minted a brand-new
+// version string on every successful call even when nothing in the
+// vault changed at all; Sync no longer does that, but shouldPrint
+// still stays keyed to real content signals rather than the version
+// string, since a version string is not proof of content on its own.)
+// currentHead, which only moves when git actually finds a real diff
+// to commit, is the reliable signal; linked/pruned catch a
+// projection-only change (a symlink relinked after something outside
+// the vault deleted it) that never touches the vault's own history at
+// all.
+func beatChangeSince(lastHead, currentHead, currentVersion string, linked, pruned int) (shouldPrint bool, line string) {
 	headChanged := currentHead != lastHead
 	touched := linked > 0 || pruned > 0
 	if !headChanged && !touched {
@@ -261,22 +262,32 @@ func beatChangeSince(lastHead, currentHead, lastVersion, currentVersion string, 
 // watchBeatResult is the JSON shape of one announced "loadout watch"
 // beat. A silent beat prints nothing in either mode.
 type watchBeatResult struct {
-	Linked       int    `json:"linked"`
-	Pruned       int    `json:"pruned"`
-	VaultChanged bool   `json:"vault_changed"`
-	Version      string `json:"version,omitempty"`
+	AdaptersProjected int    `json:"adapters_projected"`
+	Linked            int    `json:"linked"`
+	Pruned            int    `json:"pruned"`
+	VaultChanged      bool   `json:"vault_changed"`
+	Version           string `json:"version,omitempty"`
+	Merged            bool   `json:"merged,omitempty"`
+	Pushed            bool   `json:"pushed,omitempty"`
 }
 
 // printWatchBeatLine renders an already-decided-worth-announcing beat
 // to out, in text (using line, built by beatChangeSince) or JSON
-// (built fresh from the same underlying facts) per m.
-func printWatchBeatLine(out io.Writer, m mode, line string, vaultChanged bool, version string, linked, pruned int) {
+// (built fresh from the same underlying facts) per m. adaptersProjected
+// is the number of adapters this beat's syncLocal ran (every enabled
+// adapter, whether or not it linked or pruned anything); res carries
+// the beat's remote.Sync outcome, whose Merged and Pushed fields the
+// JSON shape reports directly.
+func printWatchBeatLine(out io.Writer, m mode, line string, vaultChanged bool, res remote.Result, adaptersProjected, linked, pruned int) {
 	if m == modeJSON {
 		data, err := json.Marshal(watchBeatResult{
-			Linked:       linked,
-			Pruned:       pruned,
-			VaultChanged: vaultChanged,
-			Version:      version,
+			AdaptersProjected: adaptersProjected,
+			Linked:            linked,
+			Pruned:            pruned,
+			VaultChanged:      vaultChanged,
+			Version:           res.Version,
+			Merged:            res.Merged,
+			Pushed:            res.Pushed,
 		})
 		if err != nil {
 			fmt.Fprintln(out, err)

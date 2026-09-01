@@ -455,21 +455,25 @@ func TestUnpackSnapshotRefusesEscapingSymlink(t *testing.T) {
 }
 
 // TestUnpackSnapshotRefusesChainedSymlinkEscape reproduces the review
-// finding: entry "sub/a" -> "../z" is safe by itself (it resolves
-// inside dir), and entry "sub/a/inner" -> "../../outside" also looks
-// safe by pure lexical arithmetic on its own name. But "sub/a" is
-// really a symlink to dir/z, so the OS routes the second entry's
-// write through it, landing a new symlink at dir/z/inner instead —
-// and dir/z/inner's own two ".." hops escape dir for real. The
+// finding: entry "skills/sub/a" -> "../z" is safe by itself (it
+// resolves inside dir, and inside the synced set), and entry
+// "skills/sub/a/inner" -> "../../outside" also looks safe by pure
+// lexical arithmetic on its own name. But "skills/sub/a" is really a
+// symlink to dir/skills/z, so the OS routes the second entry's write
+// through it, landing a new symlink at dir/skills/z/inner instead —
+// and dir/skills/z/inner's own two ".." hops escape dir for real. The
 // intermediate-component check must catch entry 4 before either
-// symlink is written for it.
+// symlink is written for it. (Entries live under skills/ — the
+// vault's own synced set — so this fixture also exercises Minor 9's
+// synced-set check cleanly on entry 3, which must still be ACCEPTED:
+// only the chained escape at entry 4 is the thing under test here.)
 func TestUnpackSnapshotRefusesChainedSymlinkEscape(t *testing.T) {
 	v := newSnapshotTestVault(t)
 	tarData := buildTar(t, func(tw *tar.Writer) {
-		tw.WriteHeader(&tar.Header{Name: "z/", Typeflag: tar.TypeDir, Mode: 0o755})
-		tw.WriteHeader(&tar.Header{Name: "sub/", Typeflag: tar.TypeDir, Mode: 0o755})
-		tw.WriteHeader(&tar.Header{Name: "sub/a", Typeflag: tar.TypeSymlink, Linkname: "../z", Mode: 0o777})
-		tw.WriteHeader(&tar.Header{Name: "sub/a/inner", Typeflag: tar.TypeSymlink, Linkname: "../../outside", Mode: 0o777})
+		tw.WriteHeader(&tar.Header{Name: "skills/z/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "skills/sub/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "skills/sub/a", Typeflag: tar.TypeSymlink, Linkname: "../z", Mode: 0o777})
+		tw.WriteHeader(&tar.Header{Name: "skills/sub/a/inner", Typeflag: tar.TypeSymlink, Linkname: "../../outside", Mode: 0o777})
 	})
 	blob := encryptForVault(t, v, tarData)
 
@@ -478,13 +482,13 @@ func TestUnpackSnapshotRefusesChainedSymlinkEscape(t *testing.T) {
 	if err == nil {
 		t.Fatal("UnpackSnapshot must refuse the chained symlink escape, not return cleanly")
 	}
-	if !strings.Contains(err.Error(), "sub/a/inner") || !strings.Contains(err.Error(), "the snapshot holds an unsafe path") {
+	if !strings.Contains(err.Error(), "skills/sub/a/inner") || !strings.Contains(err.Error(), "the snapshot holds an unsafe path") {
 		t.Fatalf("bad error: %v", err)
 	}
-	if _, statErr := os.Lstat(filepath.Join(dir, "z", "inner")); statErr == nil {
+	if _, statErr := os.Lstat(filepath.Join(dir, "skills", "z", "inner")); statErr == nil {
 		t.Fatal("UnpackSnapshot must not create anything at the real (symlink-resolved) location")
 	}
-	if _, statErr := os.Lstat(filepath.Join(dir, "sub", "a", "inner")); statErr == nil {
+	if _, statErr := os.Lstat(filepath.Join(dir, "skills", "sub", "a", "inner")); statErr == nil {
 		t.Fatal("UnpackSnapshot must not create anything at the lexical location either")
 	}
 	if _, statErr := os.Lstat(filepath.Join(filepath.Dir(dir), "outside")); statErr == nil {
@@ -500,10 +504,10 @@ func TestUnpackSnapshotRefusesRegularFileThroughSymlinkComponent(t *testing.T) {
 	v := newSnapshotTestVault(t)
 	tarData := buildTar(t, func(tw *tar.Writer) {
 		body := []byte("pwned")
-		tw.WriteHeader(&tar.Header{Name: "z/", Typeflag: tar.TypeDir, Mode: 0o755})
-		tw.WriteHeader(&tar.Header{Name: "sub/", Typeflag: tar.TypeDir, Mode: 0o755})
-		tw.WriteHeader(&tar.Header{Name: "sub/a", Typeflag: tar.TypeSymlink, Linkname: "../z", Mode: 0o777})
-		tw.WriteHeader(&tar.Header{Name: "sub/a/inner", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))})
+		tw.WriteHeader(&tar.Header{Name: "skills/z/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "skills/sub/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "skills/sub/a", Typeflag: tar.TypeSymlink, Linkname: "../z", Mode: 0o777})
+		tw.WriteHeader(&tar.Header{Name: "skills/sub/a/inner", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))})
 		tw.Write(body)
 	})
 	blob := encryptForVault(t, v, tarData)
@@ -513,11 +517,97 @@ func TestUnpackSnapshotRefusesRegularFileThroughSymlinkComponent(t *testing.T) {
 	if err == nil {
 		t.Fatal("UnpackSnapshot must refuse a regular-file entry routed through a symlink component")
 	}
-	if !strings.Contains(err.Error(), "sub/a/inner") || !strings.Contains(err.Error(), "the snapshot holds an unsafe path") {
+	if !strings.Contains(err.Error(), "skills/sub/a/inner") || !strings.Contains(err.Error(), "the snapshot holds an unsafe path") {
 		t.Fatalf("bad error: %v", err)
 	}
-	if _, statErr := os.Lstat(filepath.Join(dir, "z", "inner")); statErr == nil {
+	if _, statErr := os.Lstat(filepath.Join(dir, "skills", "z", "inner")); statErr == nil {
 		t.Fatal("UnpackSnapshot must not write the file at the real (symlink-resolved) location")
+	}
+}
+
+// TestUnpackSnapshotRefusesSymlinkEscapingSyncedSetToDeviceKey is
+// Minor 9's key regression test: a symlink whose target resolves
+// INSIDE dir (so a plain "does it stay inside dir" check alone would
+// accept it) but OUTSIDE the SyncedSet (skills/, memory/,
+// devices.toml) must still be refused. Without this, an enrolled but
+// malicious device could plant skills/x/link -> ../../device.key in a
+// snapshot; once merged into the real working tree, that symlink
+// would point straight at this device's real private key file, ready
+// to be followed (and its content leaked) by anything that later
+// projects skills/ into an adapter's harness.
+func TestUnpackSnapshotRefusesSymlinkEscapingSyncedSetToDeviceKey(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	tarData := buildTar(t, func(tw *tar.Writer) {
+		tw.WriteHeader(&tar.Header{Name: "skills/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "skills/x/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "skills/x/link", Typeflag: tar.TypeSymlink, Linkname: "../../device.key", Mode: 0o777})
+	})
+	blob := encryptForVault(t, v, tarData)
+
+	dir := t.TempDir()
+	err := UnpackSnapshot(v, blob, dir)
+	if err == nil {
+		t.Fatal("UnpackSnapshot must refuse a symlink that escapes the synced set even though it resolves inside dir")
+	}
+	if !strings.Contains(err.Error(), "skills/x/link") || !strings.Contains(err.Error(), "the snapshot holds an unsafe path") {
+		t.Fatalf("bad error: %v", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(dir, "skills", "x", "link")); statErr == nil {
+		t.Fatal("UnpackSnapshot must not create the key-escaping symlink")
+	}
+}
+
+// TestUnpackSnapshotRefusesSymlinkEscapingSyncedSetToManifest is the
+// same rule for a shallower escape: a symlink one level inside
+// skills/ targeting the device-local manifest one level up.
+func TestUnpackSnapshotRefusesSymlinkEscapingSyncedSetToManifest(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	tarData := buildTar(t, func(tw *tar.Writer) {
+		tw.WriteHeader(&tar.Header{Name: "skills/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "skills/link", Typeflag: tar.TypeSymlink, Linkname: "../loadout.toml", Mode: 0o777})
+	})
+	blob := encryptForVault(t, v, tarData)
+
+	dir := t.TempDir()
+	err := UnpackSnapshot(v, blob, dir)
+	if err == nil {
+		t.Fatal("UnpackSnapshot must refuse a symlink that escapes the synced set even though it resolves inside dir")
+	}
+	if !strings.Contains(err.Error(), "skills/link") || !strings.Contains(err.Error(), "the snapshot holds an unsafe path") {
+		t.Fatalf("bad error: %v", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(dir, "skills", "link")); statErr == nil {
+		t.Fatal("UnpackSnapshot must not create the manifest-escaping symlink")
+	}
+}
+
+// TestUnpackSnapshotAllowsSymlinkWithinSyncedSet proves the fix is not
+// overbroad: a benign symlink whose target stays fully inside the
+// synced set (a skill linking to a sibling skill's shared resource)
+// is still allowed.
+func TestUnpackSnapshotAllowsSymlinkWithinSyncedSet(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	tarData := buildTar(t, func(tw *tar.Writer) {
+		body := []byte("shared")
+		tw.WriteHeader(&tar.Header{Name: "skills/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "skills/b/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "skills/b/resource.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))})
+		tw.Write(body)
+		tw.WriteHeader(&tar.Header{Name: "skills/a/", Typeflag: tar.TypeDir, Mode: 0o755})
+		tw.WriteHeader(&tar.Header{Name: "skills/a/link", Typeflag: tar.TypeSymlink, Linkname: "../b/resource.txt", Mode: 0o777})
+	})
+	blob := encryptForVault(t, v, tarData)
+
+	dir := t.TempDir()
+	if err := UnpackSnapshot(v, blob, dir); err != nil {
+		t.Fatalf("a benign symlink within the synced set must still be allowed: %v", err)
+	}
+	target, err := os.Readlink(filepath.Join(dir, "skills", "a", "link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "../b/resource.txt" {
+		t.Fatalf("bad symlink target: %q", target)
 	}
 }
 

@@ -153,6 +153,9 @@ Components, each with one purpose:
 - Never write plain secret values into the vault files or into agent context.
 - Deliver secrets in two modes. Mode 1: inject as env vars when the tool starts. Mode 2 (later): an MCP broker uses the key server-side and returns only results.
 - Log every secret access with device, tool, agent, and time. Provenance is the audit trail for knowledge; the access log is the audit trail for capability.
+- **v1 trust boundary (self-host).** A snapshot is encrypted. A snapshot is not signed. Any device with the bearer token can read the enrolled recipients from `GET /v1/devices`. That device can encrypt a new snapshot to those recipients and push it. Enrolled devices merge the snapshot. They do not check its real author.
+- This includes the operator of a self-hosted server. In self-host v1, the token holder is trusted as the vault owner.
+- The hosted service (decision 12) must add per-device snapshot signing before it ships. It must reject a merge when the snapshot's signer is not in `devices.toml`. This is a wire-protocol change, not a client-only fix.
 
 ## 12. Phases
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http/httptest"
@@ -154,22 +155,19 @@ func TestRunWatchBeatSkipsQuietlyWhenVaultLocked(t *testing.T) {
 // TestBeatChangeSinceSilentWhenNothingChanged proves the baseline
 // quiet case: the head is unchanged and nothing was linked or pruned.
 func TestBeatChangeSinceSilentWhenNothingChanged(t *testing.T) {
-	shouldPrint, line := beatChangeSince("h1", "h1", "v1", "v1", 0, 0)
+	shouldPrint, line := beatChangeSince("h1", "h1", "v1", 0, 0)
 	if shouldPrint {
 		t.Fatalf("must stay silent when nothing changed, got print %q", line)
 	}
 }
 
-// TestBeatChangeSinceIgnoresBareVersionDifference is the deliberate,
-// documented deviation from a literal "OR the remote version
-// advanced" rule: internal/remote's Sync mints a brand-new version
-// string on every successful call even when zero content changed
-// (push() republishes whenever this device is already caught up —
-// Task 5's own, unmodified behavior). A version difference alone,
-// with the head unchanged and nothing linked or pruned, must never
-// trigger a print, or every idle beat would look like news.
+// TestBeatChangeSinceIgnoresBareVersionDifference proves a version
+// difference alone, with the head unchanged and nothing linked or
+// pruned, never triggers a print on its own: a version string is
+// never treated as proof of content by itself, or every idle beat
+// would look like news.
 func TestBeatChangeSinceIgnoresBareVersionDifference(t *testing.T) {
-	shouldPrint, line := beatChangeSince("h1", "h1", "v1", "v2", 0, 0)
+	shouldPrint, line := beatChangeSince("h1", "h1", "v2", 0, 0)
 	if shouldPrint {
 		t.Fatalf("a bare version difference must not trigger a print, got %q", line)
 	}
@@ -181,7 +179,7 @@ func TestBeatChangeSinceIgnoresBareVersionDifference(t *testing.T) {
 // command committed between two beats still get reported on the next
 // one.
 func TestBeatChangeSincePrintsWhenHeadMoved(t *testing.T) {
-	shouldPrint, line := beatChangeSince("h1", "h2", "v1", "v2", 0, 0)
+	shouldPrint, line := beatChangeSince("h1", "h2", "v2", 0, 0)
 	if !shouldPrint {
 		t.Fatal("a moved head must trigger a print")
 	}
@@ -195,7 +193,7 @@ func TestBeatChangeSincePrintsWhenHeadMoved(t *testing.T) {
 // a symlink relinked after something outside the vault deleted it)
 // still announces, even with the head unchanged.
 func TestBeatChangeSincePrintsWhenAdapterTouchedSomething(t *testing.T) {
-	shouldPrint, line := beatChangeSince("h1", "h1", "v1", "v1", 2, 1)
+	shouldPrint, line := beatChangeSince("h1", "h1", "v1", 2, 1)
 	if !shouldPrint {
 		t.Fatal("linking or pruning something must trigger a print even with the head unchanged")
 	}
@@ -271,6 +269,90 @@ func newIsolatedWatchVault(t *testing.T, name, url, token string) *vault.Vault {
 		t.Fatal(err)
 	}
 	return v
+}
+
+// TestRunWatchBeatJSONIncludesAdaptersProjectedMergedAndPushed is
+// Important 4's regression test: commit 2939dc1 dropped
+// adapters_projected, merged, and pushed from watchBeatResult even
+// though res.Merged, res.Pushed, and the projected adapter count were
+// still available at the call site — a silent watch --json schema
+// regression for any consumer scripting against those fields. A beat
+// that changes something must report all three, correctly.
+func TestRunWatchBeatJSONIncludesAdaptersProjectedMergedAndPushed(t *testing.T) {
+	ts, token := newWatchTestServer(t)
+	v := newIsolatedWatchVault(t, "device-a", ts.URL, token)
+
+	cfg, err := remote.Load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastHead, err := vault.HeadHash(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastVersion := cfg.LastVersion
+
+	// Beat 1: bootstraps the remote (first-ever sync always pushes
+	// once), but nothing in the vault itself changes, so it stays
+	// silent.
+	var out1, errOut1 bytes.Buffer
+	outcome, head1, version1, err := runWatchBeat(v, &out1, &errOut1, modeJSON, lastHead, lastVersion)
+	if err != nil {
+		t.Fatalf("beat 1 failed: %v (stderr: %s)", err, errOut1.String())
+	}
+	if outcome != beatRan {
+		t.Fatalf("beat 1 must run, got outcome %v", outcome)
+	}
+
+	// A separate command commits a real change between beats.
+	factPath := filepath.Join(v.MemoryDir(), "watch-json-test.md")
+	factContent := "---\nname: watch-json-test\ndescription: added between beats\n---\n\nadded between beats.\n"
+	if err := os.WriteFile(factPath, []byte(factContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Snapshot(v, "add memory watch-json-test"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out2, errOut2 bytes.Buffer
+	outcome, _, version2, err := runWatchBeat(v, &out2, &errOut2, modeJSON, head1, version1)
+	if err != nil {
+		t.Fatalf("beat 2 failed: %v (stderr: %s)", err, errOut2.String())
+	}
+	if outcome != beatRan {
+		t.Fatalf("beat 2 must run, got outcome %v", outcome)
+	}
+	if out2.Len() == 0 {
+		t.Fatal("beat 2 must announce the change, but it printed nothing")
+	}
+
+	var got struct {
+		AdaptersProjected int    `json:"adapters_projected"`
+		Linked            int    `json:"linked"`
+		Pruned            int    `json:"pruned"`
+		VaultChanged      bool   `json:"vault_changed"`
+		Version           string `json:"version"`
+		Merged            bool   `json:"merged"`
+		Pushed            bool   `json:"pushed"`
+	}
+	if err := json.Unmarshal(out2.Bytes(), &got); err != nil {
+		t.Fatalf("beat 2's json did not parse: %v\noutput: %s", err, out2.String())
+	}
+	if got.AdaptersProjected != 2 {
+		t.Fatalf("adapters_projected must count every enabled adapter (claude-code, pi), got %d", got.AdaptersProjected)
+	}
+	if !got.VaultChanged {
+		t.Fatal("vault_changed must be true for a beat that picked up a real edit")
+	}
+	if got.Version != version2 {
+		t.Fatalf("version = %q, want %q", got.Version, version2)
+	}
+	if !got.Pushed {
+		t.Fatalf("pushed must be true: this device published the new content itself, got %+v", got)
+	}
+	if got.Merged {
+		t.Fatalf("merged must be false: this device pushed its own edit, it did not merge someone else's, got %+v", got)
+	}
 }
 
 // TestRunWatchBeatAnnouncesAChangeCommittedBetweenBeats is the

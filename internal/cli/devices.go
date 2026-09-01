@@ -240,6 +240,23 @@ func cmdDevicesApprove(out, errOut io.Writer, args []string, m mode) int {
 		return 1
 	}
 
+	// remote.Sync just pulled and merged the remote's own current
+	// devices.toml, under whole-file last-write-wins: a concurrent
+	// sync from another device, racing this approval, can silently
+	// overwrite this exact roster entry with its own (a real,
+	// confirmed merge, reporting no error at all) before this command
+	// ever gets to report success. Re-read the roster now, and never
+	// celebrate an approval the merge just dropped.
+	roster, err := vault.ReadRoster(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	if roster[name] != result.recipient {
+		fmt.Fprintf(errOut, "the approval of %s was overridden by a concurrent sync. Fix: run loadout devices approve %s again.\n", name, name)
+		return 1
+	}
+
 	if m == modeJSON {
 		printJSON(out, devicesApproveResult{
 			Name:      name,
