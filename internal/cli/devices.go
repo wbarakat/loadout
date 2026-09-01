@@ -397,7 +397,27 @@ func approvePlain(v *vault.Vault, name, recipient string) (approveResult, error)
 
 	if existing, ok := roster[name]; ok {
 		if existing == recipient {
-			return approveResult{kind: approveAlreadyMatches, recipient: existing}, nil
+			// The roster already agrees, but that alone does not prove
+			// this name's earlier approval ever finished: AddToRoster
+			// persists the roster BEFORE ReEncryptSecrets runs, so a
+			// prior call that crashed (or whose ReEncryptSecrets call
+			// itself failed) between those two steps leaves exactly
+			// this state behind — a roster that already matches, with
+			// some secret still unreadable to the newcomer. Re-running
+			// ReEncryptSecrets here is how a retry actually completes
+			// that interrupted approval; it is safe and idempotent in
+			// effect even when nothing was actually interrupted; the
+			// only visible cost is a re-encrypted (but equally
+			// decryptable) value.age and one more snapshot, and
+			// "devices approve" is a rare admin action, not a hot loop.
+			skipped, err := vault.ReEncryptSecrets(v)
+			if err != nil {
+				return approveResult{}, err
+			}
+			if err := vault.Snapshot(v, "approve device "+name); err != nil {
+				return approveResult{}, err
+			}
+			return approveResult{kind: approveAlreadyMatches, recipient: existing, skippedSecrets: skipped}, nil
 		}
 		return approveResult{kind: approveMismatchBlocked, recipient: recipient, stored: existing}, nil
 	}

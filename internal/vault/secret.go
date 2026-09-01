@@ -316,6 +316,12 @@ func ReEncryptSecrets(v *Vault) (skipped []string, err error) {
 // with a nil error, when this device cannot decrypt the secret at
 // all: ReEncryptSecrets treats that as one skipped item, never a
 // reason to fail the whole run.
+//
+// This treats ANY DecryptSecret error as a skip, inherited from
+// DecryptSecret's own single fixed error for every decrypt failure: a
+// local device.key I/O error (rather than a genuine "not a recipient"
+// case) would therefore also present as a skip here. Acknowledged;
+// tightening that distinction is deferred.
 func reEncryptOneSecret(v *Vault, name string, recipients []age.Recipient) (skip bool, err error) {
 	plaintext, err := DecryptSecret(v, name)
 	if err != nil {

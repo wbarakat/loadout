@@ -26,6 +26,48 @@ type doctorResult struct {
 	Count    int             `json:"count"`
 }
 
+// checkSecretReadability probes every secret with this device's own
+// key and reports one problem for each it cannot decrypt: a durable,
+// surfaced signal for the case ReEncryptSecrets' own skip list
+// otherwise only warns about once, at approve time.
+//
+// This is a READABILITY PROBE, not a use: it calls vault.DecryptSecret
+// directly and checks only the error, never AppendAccessLog — doctor
+// reading every secret on every run must never look like this device
+// actually using them (that would flood the access log with entries
+// no human or tool ever asked for). Every plaintext DecryptSecret
+// hands back is zeroed immediately: doctor never needs the value,
+// only whether the decrypt succeeded.
+func checkSecretReadability(v *vault.Vault) ([]doctorProblem, error) {
+	secrets, err := vault.ListSecrets(v)
+	if err != nil {
+		return nil, err
+	}
+	if len(secrets) == 0 {
+		return nil, nil
+	}
+	deviceName, _, err := vault.DeviceIdentity(v)
+	if err != nil {
+		return nil, err
+	}
+	var problems []doctorProblem
+	for _, s := range secrets {
+		value, err := vault.DecryptSecret(v, s.Name)
+		if err != nil {
+			problems = append(problems, doctorProblem{
+				Source: "secret/" + s.Name,
+				Detail: "this device cannot read it",
+				Fix:    "run loadout devices approve " + deviceName + " from a device that can read it, then sync.",
+			})
+			continue
+		}
+		for i := range value {
+			value[i] = 0
+		}
+	}
+	return problems, nil
+}
+
 func cmdDoctor(out, errOut io.Writer, m mode) int {
 	v, err := vault.Open(vault.DefaultRoot())
 	if err != nil {
@@ -65,6 +107,12 @@ func cmdDoctor(out, errOut io.Writer, m mode) int {
 			Fix:    "add a SKILL.md file, or remove the directory",
 		})
 	}
+	secretProblems, err := checkSecretReadability(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	problems = append(problems, secretProblems...)
 	for _, a := range adapter.Enabled(v) {
 		for _, p := range a.Check(v) {
 			problems = append(problems, doctorProblem{Source: p.Adapter, Detail: p.Detail, Fix: p.Fix})

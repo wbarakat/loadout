@@ -1323,3 +1323,202 @@ func TestDevicesApproveWarnsOnUndecryptableSecretButStillSyncs(t *testing.T) {
 		t.Fatalf("C's decrypted secret = %q, want %q", got, dummySecretValue)
 	}
 }
+
+// TestDevicesApproveAlreadyMatchesRetriesReEncryption reproduces the
+// exact interrupted-approval state a crash between AddToRoster and
+// ReEncryptSecrets would leave behind: devices.toml already lists the
+// name (hand-written here, standing in for a prior approve that
+// persisted the roster write but never got to re-encrypt), while
+// value.age is still encrypted only to the original device. A plain
+// re-approve must hit the approveAlreadyMatches path AND still
+// complete the re-encryption — not silently report "already approved"
+// forever while the newcomer stays unable to read the secret.
+func TestDevicesApproveAlreadyMatchesRetriesReEncryption(t *testing.T) {
+	ts, token := newRemoteTestServer(t)
+
+	baseA := newDeviceEnv(t)
+	useDeviceEnv(t, baseA)
+	run(t, "init")
+	writeDeviceName(t, baseA, "device-a")
+	run(t, "remote", "add", ts.URL, token)
+
+	// The secret is created while the roster is still empty, so it is
+	// encrypted only to A's own identity — exactly the ciphertext a
+	// real interrupted approval would have left B unable to read.
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai"); code != 0 {
+		t.Fatalf("secret add on A failed: %s", errOut)
+	}
+
+	baseB := newDeviceEnv(t)
+	useDeviceEnv(t, baseB)
+	run(t, "init")
+	writeDeviceName(t, baseB, "device-b")
+	if _, errOut, code := run(t, "join", ts.URL, token); code != 0 {
+		t.Fatalf("join B failed: %s", errOut)
+	}
+	vB, err := vault.Open(filepath.Join(baseB, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, bRecipient, err := vault.DeviceIdentity(vB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bKeyData, err := os.ReadFile(filepath.Join(vB.Root, "device.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bIdentity, err := age.ParseX25519Identity(strings.TrimSpace(string(bKeyData)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Hand-write devices.toml directly — bypassing "devices approve"
+	// entirely — to simulate a prior approval that got exactly this
+	// far: the roster write landed and was committed, but
+	// ReEncryptSecrets never ran (or failed) before the process died.
+	vA, err := vault.Open(filepath.Join(baseA, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, aRecipient, err := vault.DeviceIdentity(vA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(vA, "device-a", aRecipient); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(vA, "device-b", bRecipient); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Snapshot(vA, "simulate a roster write with no re-encrypt yet"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Precondition: B genuinely cannot decrypt the secret yet.
+	ciphertext, err := os.ReadFile(filepath.Join(vA.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), bIdentity); err == nil {
+		t.Fatal("test setup error: B must not be able to decrypt the secret before the retried approve runs")
+	}
+
+	// The retry: a plain re-approve of a name the roster already
+	// lists under the exact same recipient.
+	useDeviceEnv(t, baseA)
+	out, errOut, code := run(t, "devices", "approve", "device-b")
+	if code != 0 {
+		t.Fatalf("retried approve failed: %s", errOut)
+	}
+	if out != "device-b is already approved.\n" {
+		t.Fatalf("bad retry output: %q", out)
+	}
+
+	// B syncs and must now decrypt the secret: the retry actually
+	// completed the interrupted re-encryption.
+	useDeviceEnv(t, baseB)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on B failed: %s", errOut)
+	}
+	got, errOut, code := run(t, "secret", "show", "openai-key", "--reveal")
+	if code != 0 {
+		t.Fatalf("secret show on B failed: %s", errOut)
+	}
+	if got != dummySecretValue {
+		t.Fatalf("B's decrypted secret = %q, want %q", got, dummySecretValue)
+	}
+}
+
+// TestDevicesApproveRotateReEncryptsSecretsAndRevokesOldKey proves the
+// --rotate call site's effect on secrets end to end: a secret that
+// existed before a device's key is rotated is re-encrypted to the NEW
+// key, and the OLD, now-revoked key can no longer decrypt it — true
+// revocation (the old recipient is dropped, not merely joined by a
+// new one), not just an added recipient.
+func TestDevicesApproveRotateReEncryptsSecretsAndRevokesOldKey(t *testing.T) {
+	ts, token := newRemoteTestServer(t)
+
+	baseA := newDeviceEnv(t)
+	useDeviceEnv(t, baseA)
+	run(t, "init")
+	writeDeviceName(t, baseA, "device-a")
+	run(t, "remote", "add", ts.URL, token)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("bootstrap sync on A failed: %s", errOut)
+	}
+
+	baseB := newDeviceEnv(t)
+	useDeviceEnv(t, baseB)
+	run(t, "init")
+	writeDeviceName(t, baseB, "device-b")
+	if _, errOut, code := run(t, "join", ts.URL, token); code != 0 {
+		t.Fatalf("join B failed: %s", errOut)
+	}
+	// Capture B's ORIGINAL identity before it is ever rotated out.
+	oldKeyData, err := os.ReadFile(filepath.Join(baseB, "vault", "device.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldIdentity, err := age.ParseX25519Identity(strings.TrimSpace(string(oldKeyData)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	useDeviceEnv(t, baseA)
+	if _, errOut, code := run(t, "devices", "approve", "device-b"); code != 0 {
+		t.Fatalf("approve B failed: %s", errOut)
+	}
+
+	// A creates a secret while B, under its ORIGINAL key, is a fully
+	// approved recipient.
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai"); code != 0 {
+		t.Fatalf("secret add failed: %s", errOut)
+	}
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on A failed: %s", errOut)
+	}
+
+	ciphertext, err := os.ReadFile(filepath.Join(baseA, "vault", "secrets", "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), oldIdentity); err != nil {
+		t.Fatalf("test setup error: B's original key must decrypt the secret before rotation: %v", err)
+	}
+
+	// The admin verifies a brand-new key out-of-band (standing in for
+	// a reinstalled or re-keyed device-b) and rotates to it.
+	newIdentity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRecipient := newIdentity.Recipient().String()
+	out, errOut, code := run(t, "devices", "approve", "device-b", "--rotate", newRecipient)
+	if code != 0 {
+		t.Fatalf("rotate failed: %s", errOut)
+	}
+	if out != fmt.Sprintf("rotated device-b to %s.\n", newRecipient) {
+		t.Fatalf("bad rotate output: %q", out)
+	}
+
+	ciphertext, err = os.ReadFile(filepath.Join(baseA, "vault", "secrets", "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := age.Decrypt(bytes.NewReader(ciphertext), newIdentity)
+	if err != nil {
+		t.Fatalf("the NEW key must decrypt the pre-existing secret after rotation: %v", err)
+	}
+	var plaintext bytes.Buffer
+	if _, err := plaintext.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	if plaintext.String() != dummySecretValue {
+		t.Fatalf("decrypted value = %q, want %q", plaintext.String(), dummySecretValue)
+	}
+
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), oldIdentity); err == nil {
+		t.Fatal("the OLD, rotated-out key must no longer decrypt the secret: revocation must actually drop it as a recipient")
+	}
+}
