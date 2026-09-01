@@ -1119,3 +1119,231 @@ func TestSecretMetaMissingRefused(t *testing.T) {
 		t.Fatal("SecretMeta must refuse a name that does not exist")
 	}
 }
+
+// TestAddSecretExcludesNoSecretsDeviceFromRecipients is the headline
+// security proof for Phase 8a Task 2: with a roster of this device
+// (full) plus a second, no-secrets device, AddSecret's value.age
+// decrypts with this device's own key AND with a full roster device's
+// key, but a real age.Decrypt with the no-secrets device's identity
+// FAILS. A no-secrets device's key is never a recipient of any secret
+// — provably, by trying to decrypt with it and getting an error.
+func TestAddSecretExcludesNoSecretsDeviceFromRecipients(t *testing.T) {
+	v := newVault(t)
+	ownRecipient, err := vault.DeviceRecipient(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "this-device", ownRecipient, vault.RoleFull); err != nil {
+		t.Fatal(err)
+	}
+	fullOther, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "full-other", fullOther.Recipient().String(), vault.RoleFull); err != nil {
+		t.Fatal(err)
+	}
+	noSecrets, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "dashboard", noSecrets.Recipient().String(), vault.RoleNoSecrets); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+
+	ciphertext, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// This device (full): must decrypt.
+	selfIdentity := deviceIdentityFor(t, v)
+	if r, err := age.Decrypt(bytes.NewReader(ciphertext), selfIdentity); err != nil {
+		t.Fatalf("this full device must decrypt the secret: %v", err)
+	} else {
+		var plaintext bytes.Buffer
+		if _, err := plaintext.ReadFrom(r); err != nil {
+			t.Fatal(err)
+		}
+		if plaintext.String() != dummySecretValue {
+			t.Fatalf("decrypted value = %q, want %q", plaintext.String(), dummySecretValue)
+		}
+	}
+
+	// The full roster device: must decrypt.
+	if r, err := age.Decrypt(bytes.NewReader(ciphertext), fullOther); err != nil {
+		t.Fatalf("the full roster device must decrypt the secret: %v", err)
+	} else {
+		var plaintext bytes.Buffer
+		if _, err := plaintext.ReadFrom(r); err != nil {
+			t.Fatal(err)
+		}
+		if plaintext.String() != dummySecretValue {
+			t.Fatalf("decrypted value = %q, want %q", plaintext.String(), dummySecretValue)
+		}
+	}
+
+	// THE SECURITY PROOF: the no-secrets device's key must NOT decrypt.
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), noSecrets); err == nil {
+		t.Fatal("SECURITY VIOLATION: a no-secrets device's key must never decrypt a secret, but age.Decrypt succeeded")
+	}
+}
+
+// TestAddSecretTwoFullOneNoSecrets proves the same exclusion with two
+// full devices in the roster: the value.age is a recipient of both
+// full devices, but not the no-secrets one.
+func TestAddSecretTwoFullOneNoSecrets(t *testing.T) {
+	v := newVault(t)
+	fullA, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "full-a", fullA.Recipient().String(), vault.RoleFull); err != nil {
+		t.Fatal(err)
+	}
+	fullB, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "full-b", fullB.Recipient().String(), vault.RoleFull); err != nil {
+		t.Fatal(err)
+	}
+	noSecrets, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "dashboard", noSecrets.Recipient().String(), vault.RoleNoSecrets); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+
+	ciphertext, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []*age.X25519Identity{fullA, fullB} {
+		if _, err := age.Decrypt(bytes.NewReader(ciphertext), id); err != nil {
+			t.Fatalf("a full roster device must decrypt the secret: %v", err)
+		}
+	}
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), noSecrets); err == nil {
+		t.Fatal("the no-secrets device must not decrypt the secret")
+	}
+}
+
+// TestSecretRecipientsBackwardCompatAllFull proves a roster of only
+// full devices (or no roster at all) behaves exactly as before Phase
+// 8a: every device (full roster members plus self) can decrypt.
+func TestSecretRecipientsBackwardCompatAllFull(t *testing.T) {
+	v := newVault(t)
+	// No roster at all: self alone must decrypt (unchanged prior
+	// behavior, already covered by other tests) — then add an
+	// all-full roster and re-check.
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "other-device", other.Recipient().String(), vault.RoleFull); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+
+	ciphertext, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	selfIdentity := deviceIdentityFor(t, v)
+	for _, id := range []*age.X25519Identity{selfIdentity, other} {
+		r, err := age.Decrypt(bytes.NewReader(ciphertext), id)
+		if err != nil {
+			t.Fatalf("every device must decrypt with an all-full roster: %v", err)
+		}
+		var plaintext bytes.Buffer
+		if _, err := plaintext.ReadFrom(r); err != nil {
+			t.Fatal(err)
+		}
+		if plaintext.String() != dummySecretValue {
+			t.Fatalf("decrypted value = %q, want %q", plaintext.String(), dummySecretValue)
+		}
+	}
+}
+
+// TestAddSecretRefusedOnNoSecretsSelfDevice proves the write-side
+// refusal: a device whose OWN roster role is no-secrets refuses
+// AddSecret outright, with the exact fixed error, rather than writing
+// a secret it could never read back.
+func TestAddSecretRefusedOnNoSecretsSelfDevice(t *testing.T) {
+	v := newVault(t)
+	ownRecipient, err := vault.DeviceRecipient(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "this-device", ownRecipient, vault.RoleNoSecrets); err != nil {
+		t.Fatal(err)
+	}
+
+	err = vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue))
+	if err == nil {
+		t.Fatal("AddSecret must be refused on a no-secrets self device")
+	}
+	want := "this device is enrolled as no-secrets and cannot add or rotate a secret. Fix: use a full device."
+	if err.Error() != want {
+		t.Fatalf("bad error: got %q, want %q", err.Error(), want)
+	}
+	if vault.SecretExists(v, "openai-key") {
+		t.Fatal("a refused AddSecret must not create anything")
+	}
+}
+
+// TestRotateSecretRefusedOnNoSecretsSelfDevice proves the same
+// write-side refusal for RotateSecret: added while the device is
+// still full, then the device's own role flips to no-secrets (an
+// operator hand-edit, or a role change synced in), and rotate is
+// refused, leaving the existing value untouched.
+func TestRotateSecretRefusedOnNoSecretsSelfDevice(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ownRecipient, err := vault.DeviceRecipient(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "this-device", ownRecipient, vault.RoleNoSecrets); err != nil {
+		t.Fatal(err)
+	}
+
+	err = vault.RotateSecret(v, "openai-key", nil, []byte("rotated-value"))
+	if err == nil {
+		t.Fatal("RotateSecret must be refused on a no-secrets self device")
+	}
+	want := "this device is enrolled as no-secrets and cannot add or rotate a secret. Fix: use a full device."
+	if err.Error() != want {
+		t.Fatalf("bad error: got %q, want %q", err.Error(), want)
+	}
+
+	after, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a refused rotate must never touch the existing value")
+	}
+}

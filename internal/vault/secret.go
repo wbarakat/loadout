@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -138,14 +139,26 @@ func SecretExists(v *Vault, name string) bool {
 }
 
 // secretRecipients lists the age recipients a secret value must be
-// encrypted to: every device roster recipient, plus this device
-// itself, so the device that creates a secret can always decrypt it
-// again, even before it is enrolled in the roster. It builds on
-// rosterRecipients (snapshot.go) — the same roster-reading logic
-// PackSnapshot's packRecipients uses — so devices.toml is read and
-// parsed in exactly one place.
+// encrypted to: every roster device whose role is RoleFull, plus this
+// device itself IF this device's own role is RoleFull. A RoleNoSecrets
+// roster device is NEVER a recipient of any secret — that is the
+// security invariant Phase 8a Task 2 exists to enforce: a no-secrets
+// device (a future browser dashboard) provably cannot decrypt a
+// secret, because its key is never on the recipient list in the first
+// place.
+//
+// This device's own role comes from its own roster entry, found by
+// matching DeviceRecipient against every entry's Recipient. A device
+// not yet enrolled in the roster (bootstrap: the first, owner device,
+// before any devices.toml exists) is treated as RoleFull — the same
+// "roster ∪ self" union secretRecipients has always given an
+// unenrolled device, now conditioned on role.
+//
+// With a roster of only full devices, or no roster at all, this
+// behaves exactly as before Phase 8a: every full device plus self,
+// deduped.
 func secretRecipients(v *Vault) ([]age.Recipient, error) {
-	recipients, err := rosterRecipients(v)
+	entries, err := ReadRosterEntries(v)
 	if err != nil {
 		return nil, err
 	}
@@ -154,13 +167,76 @@ func secretRecipients(v *Vault) ([]age.Recipient, error) {
 		return nil, err
 	}
 	self := identity.Recipient()
-	for _, r := range recipients {
-		if x, ok := r.(*age.X25519Recipient); ok && x.String() == self.String() {
-			return recipients, nil
+
+	selfRole := RoleFull
+	selfEnrolled := false
+	for _, e := range entries {
+		if e.Recipient == self.String() {
+			selfRole = e.Role
+			selfEnrolled = true
+			break
 		}
 	}
-	return append(recipients, self), nil
+
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	recipients := make([]age.Recipient, 0, len(names)+1)
+	seen := make(map[string]bool, len(names)+1)
+	for _, name := range names {
+		e := entries[name]
+		if e.Role != RoleFull {
+			continue
+		}
+		r, err := age.ParseX25519Recipient(e.Recipient)
+		if err != nil {
+			return nil, rosterErr(devicesTomlPath(v), fmt.Errorf("device %q holds an invalid recipient", name))
+		}
+		if seen[r.String()] {
+			continue
+		}
+		seen[r.String()] = true
+		recipients = append(recipients, r)
+	}
+
+	if !seen[self.String()] && (!selfEnrolled || selfRole == RoleFull) {
+		recipients = append(recipients, self)
+	}
+	return recipients, nil
 }
+
+// selfRole reports this device's own role: the role on its own roster
+// entry (matched by recipient), or RoleFull when this device is not
+// enrolled in the roster yet (bootstrap). AddSecret and RotateSecret
+// call this to refuse a write on a no-secrets device before it ever
+// touches disk.
+func selfRole(v *Vault) (string, error) {
+	entries, err := ReadRosterEntries(v)
+	if err != nil {
+		return "", err
+	}
+	identity, err := deviceKey(v)
+	if err != nil {
+		return "", err
+	}
+	self := identity.Recipient().String()
+	for _, e := range entries {
+		if e.Recipient == self {
+			return e.Role, nil
+		}
+	}
+	return RoleFull, nil
+}
+
+// noSecretsWriteErr is the fixed error AddSecret and RotateSecret
+// return when this device's own role is RoleNoSecrets: a no-secrets
+// device must never write a secret, since secretRecipients would
+// exclude it from the very ciphertext it just wrote, leaving it unable
+// to read back its own value.
+var noSecretsWriteErr = errors.New("this device is enrolled as no-secrets and cannot add or rotate a secret. Fix: use a full device.")
 
 // renderSecretMeta builds a secret's plaintext meta.md frontmatter.
 // It NEVER holds the secret value: only name, service, hook,
@@ -206,6 +282,14 @@ func AddSecret(v *Vault, name, service, hook, rotateAfter, by string, allowedHos
 			value[i] = 0
 		}
 	}()
+
+	role, err := selfRole(v)
+	if err != nil {
+		return err
+	}
+	if role != RoleFull {
+		return noSecretsWriteErr
+	}
 
 	if err := ValidateSecretName(name); err != nil {
 		return err
@@ -581,6 +665,14 @@ func RotateSecret(v *Vault, name string, allowedHosts []string, newValue []byte)
 			newValue[i] = 0
 		}
 	}()
+
+	role, err := selfRole(v)
+	if err != nil {
+		return err
+	}
+	if role != RoleFull {
+		return noSecretsWriteErr
+	}
 
 	if err := ValidateSecretName(name); err != nil {
 		return err

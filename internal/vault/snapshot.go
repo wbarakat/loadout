@@ -264,12 +264,15 @@ func PackSnapshot(v *Vault) (blob []byte, headHashOut string, err error) {
 	return buf.Bytes(), headHashOut, nil
 }
 
-// rosterRecipients reads devices.toml and returns its recipients,
-// sorted by device name. An empty or absent roster returns an empty,
-// non-nil slice, not an error: a vault with no roster yet is a valid
-// state, not a failure. Both packRecipients (this file) and
-// secretRecipients (secret.go) build on this one function, so the
-// roster is read and parsed in exactly one place.
+// rosterRecipients reads devices.toml and returns EVERY device's
+// recipient, sorted by device name, regardless of role. An empty or
+// absent roster returns an empty, non-nil slice, not an error: a
+// vault with no roster yet is a valid state, not a failure.
+// packRecipients (this file) builds on this: a synced snapshot goes
+// to every device, full or no-secrets, since only secret VALUES are
+// role-gated. secretRecipients (secret.go) reads the roster itself,
+// through ReadRosterEntries, since it needs each entry's role too —
+// it does not build on this function.
 func rosterRecipients(v *Vault) ([]age.Recipient, error) {
 	roster, err := ReadRoster(v)
 	if err != nil {
