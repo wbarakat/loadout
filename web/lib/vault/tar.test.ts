@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readTar, UnsafeEntryError, type TarEntry } from "./tar.js";
+import { readTar, writeTar, UnsafeEntryError, type TarEntry } from "./tar.js";
 
 /*
  * A tiny, test-only USTAR writer.
@@ -232,5 +232,119 @@ describe("readTar", () => {
     ]);
     expect(() => readTar(tar)).toThrow(UnsafeEntryError);
     expect(() => readTar(tar)).toThrow(/size/i);
+  });
+});
+
+/*
+ * writeTar: the deterministic ustar writer.
+ *
+ * These tests prove the writer round-trips through OUR OWN reader (`readTar`
+ * above). Cross-language acceptance — Go's `UnpackSnapshot` reading this
+ * writer's output — is proven separately, later.
+ */
+
+/** A small vault-shaped file list. Deliberately omits directory entries, so
+ * the same fixture doubles as the "derive directories from file paths"
+ * test. `secrets/k/value.age` carries arbitrary non-UTF8 bytes (including
+ * an embedded NUL) at mode 0600, matching a real secret value file. */
+function sampleFileEntries(): TarEntry[] {
+  return [
+    {
+      name: "devices.toml",
+      type: "file",
+      mode: 0o644,
+      bytes: new TextEncoder().encode("[devices.mac]\n"),
+    },
+    {
+      name: "memory/y.md",
+      type: "file",
+      mode: 0o644,
+      bytes: new TextEncoder().encode("# y\n"),
+    },
+    {
+      name: "secrets/k/meta.md",
+      type: "file",
+      mode: 0o644,
+      bytes: new TextEncoder().encode("name: k\n"),
+    },
+    {
+      name: "secrets/k/value.age",
+      type: "file",
+      mode: 0o600,
+      bytes: new Uint8Array([0x00, 0xff, 0xfe, 0x02, 0x81, 0x0a, 0x00, 0x9d]),
+    },
+    {
+      name: "skills/x/SKILL.md",
+      type: "file",
+      mode: 0o644,
+      bytes: new TextEncoder().encode("# x skill\n"),
+    },
+  ];
+}
+
+describe("writeTar", () => {
+  it("round-trips every file entry through readTar, preserving value.age's non-UTF8 bytes byte-for-byte", () => {
+    const entries = sampleFileEntries();
+    const readBack = readTar(writeTar(entries));
+
+    for (const expected of entries) {
+      const actual = findEntry(readBack, expected.name);
+      expect(actual.type).toBe("file");
+      expect(actual.mode).toBe(expected.mode);
+      expect(Array.from(actual.bytes)).toEqual(Array.from(expected.bytes));
+    }
+  });
+
+  it("derives a directory entry for every directory on each file's path", () => {
+    const readBack = readTar(writeTar(sampleFileEntries()));
+    for (const dirName of [
+      "memory/",
+      "secrets/",
+      "secrets/k/",
+      "skills/",
+      "skills/x/",
+    ]) {
+      const dir = findEntry(readBack, dirName);
+      expect(dir.type).toBe("dir");
+      expect(dir.name.endsWith("/")).toBe(true);
+    }
+  });
+
+  it("produces byte-identical output for the same content across two separate calls", () => {
+    const first = writeTar(sampleFileEntries());
+    const second = writeTar(sampleFileEntries());
+    expect(Array.from(first)).toEqual(Array.from(second));
+  });
+
+  it("emits entries in one global lexicographic sort by full path, regardless of input order", () => {
+    const entries = sampleFileEntries();
+    const shuffled = [entries[4], entries[0], entries[3], entries[1], entries[2]] as TarEntry[];
+    const readBack = readTar(writeTar(shuffled));
+    const names = readBack.map((entry) => entry.name);
+    const expectedOrder = [...names].sort();
+    expect(names).toEqual(expectedOrder);
+  });
+
+  it("preserves a value.age entry's 0600 mode through write and read", () => {
+    const readBack = readTar(writeTar(sampleFileEntries()));
+    expect(findEntry(readBack, "secrets/k/value.age").mode).toBe(0o600);
+  });
+
+  it("splits a name over 100 bytes into ustar prefix+name fields and round-trips it", () => {
+    const longDirSegment = "x".repeat(95);
+    const longName = `skills/${longDirSegment}/SKILL.md`;
+    expect(new TextEncoder().encode(longName).length).toBeGreaterThan(100);
+
+    const entries: TarEntry[] = [
+      {
+        name: longName,
+        type: "file",
+        mode: 0o644,
+        bytes: new TextEncoder().encode("# long\n"),
+      },
+    ];
+    const readBack = readTar(writeTar(entries));
+    const found = findEntry(readBack, longName);
+    expect(new TextDecoder().decode(found.bytes)).toBe("# long\n");
   });
 });
