@@ -11,7 +11,10 @@ Phase 4 adds cloud sync: `loadoutd`, device enrollment, and `loadout
 watch`. See the "Sync across your machines" section below. Phase 5
 adds encrypted secrets: `secret add`, `secret show --reveal`, `secret
 rotate`, and `loadout run` to inject a secret into a child process.
-See the "Secrets" section below. See PLAN.md for the roadmap.
+See the "Secrets" section below. Phase 6 adds `loadout mcp`: a Model
+Context Protocol server, so an agent tool can read the vault and use a
+secret through a broker, without ever holding the secret's value. See
+the "MCP" section below. See PLAN.md for the roadmap.
 
 ## Install
 
@@ -66,6 +69,7 @@ lists every verb Loadout supports today.
 | `secret rotate <name> [--by <who>]` | Replace a secret's value. Pipe the new value on stdin. |
 | `secret rm <name>` | Remove a secret. |
 | `run --secret <name>[=ENVVAR] [--secret <name2>...] [--by <who>] -- <cmd> [args...]` | Decrypt secrets and inject them into a child process, then run it. |
+| `mcp` | Serve the Model Context Protocol on stdin/stdout, for an agent tool to connect to. |
 
 Run `loadout help` at any time to print this list from the binary
 itself.
@@ -293,6 +297,94 @@ exceptions are a child process under `loadout run`, and an explicit
 `--reveal`. The value never appears in loadout's own output, in an
 error message, in the access log, or anywhere on disk outside
 `value.age`.
+
+## MCP
+
+Loadout can serve the Model Context Protocol (MCP). Run `loadout mcp`
+to start it. It reads JSON-RPC messages from stdin, and writes replies
+to stdout. Use it to connect an agent tool to your vault.
+
+### Register the server
+
+Most MCP clients read a JSON config file. Point the command at
+`loadout mcp`, with no arguments:
+
+    {
+      "mcpServers": {
+        "loadout": {
+          "command": "loadout",
+          "args": ["mcp"]
+        }
+      }
+    }
+
+For Claude Code, add this stanza to your project's `.mcp.json`, or run:
+
+    claude mcp add loadout -- loadout mcp
+
+For Codex, add the same stanza under `mcp_servers` in your own Codex
+config file. Check your agent tool's own docs for its exact config
+file and its location. The command and its argument stay the same
+everywhere: `loadout mcp`.
+
+### The read tools
+
+Loadout exposes five read-only tools over MCP:
+
+| Tool | Purpose |
+|---|---|
+| `context` | Read the vault's compact picture: counts, every hook, recent history. |
+| `recall` | Search skills and memory facts for terms. |
+| `show` | Read one skill or memory item's full body. Refuses a secret address. |
+| `list` | List every skill and memory item. Excludes secrets. |
+| `list_secrets` | List every secret's metadata: name, service, hook, allowed hosts. Never a value. |
+
+None of these five tools can ever return a secret's value. `show`
+refuses a `secret/*` address outright; use `list_secrets` for a
+secret's metadata instead.
+
+### The secret broker: `http_request`
+
+An agent often needs a secret to call an API, but it must never hold
+the key itself. The `http_request` tool solves this. It sends one HTTP
+request on the agent's behalf. The agent writes `{{secret:<name>}}` in
+a header value or in the body. Loadout decrypts the secret and
+substitutes it into the OUTBOUND request only. The agent never sees
+the value.
+
+Loadout refuses the request unless the secret's `allowed_hosts` names
+the request's exact host. This check is fail-closed: a secret with no
+allowed hosts can never be brokered at all.
+
+Set `allowed_hosts` when you add or rotate a secret:
+
+    printf %s "sk-abc123" | loadout secret add openai-key --service openai --allowed-hosts api.openai.com
+
+    loadout secret rotate openai-key --allowed-hosts api.openai.com,api.openai.com:8443
+
+Loadout also scrubs the outbound server's own response. If the host
+reflects the secret back — in a header, or in an error body — Loadout
+replaces every occurrence with `[redacted-by-loadout]` before the agent
+ever sees the result.
+
+### The trust boundary
+
+An allowed host is fully trusted with the secret, and with its own
+response. Loadout sends the value to that host, and hands the host's
+reply back to the agent, once scrubbed of the value itself. Allow-list
+only a host you trust. Do not allow-list a host that might leak or
+misuse the credential. Loadout cannot protect you from a host you
+choose to trust.
+
+### The invariant
+
+An agent using `http_request` never receives the secret's value.
+Loadout substitutes it into the outbound request on the server side,
+and scrubs it from the response before the agent ever reads it. The
+same invariant that governs `loadout run` and `secret show --reveal`
+holds here too: the value never appears in the MCP stream, in an
+error, or in the access log. The access log records the host a secret
+reached, never the value.
 
 ## How it stays safe
 

