@@ -235,6 +235,16 @@ func selfRole(v *Vault) (string, error) {
 	return RoleFull, nil
 }
 
+// SelfRole reports this device's own role: RoleFull or RoleNoSecrets,
+// the same value selfRole computes for AddSecret and RotateSecret.
+// Exported for internal/remote's sync merge path and internal/cli's
+// doctor check, which both must know whether THIS device may
+// reconcile or is expected to be unable to read secrets — see
+// ReEncryptSecrets and the Phase 8a whole-branch fix wave.
+func SelfRole(v *Vault) (string, error) {
+	return selfRole(v)
+}
+
 // sameRecipient reports whether raw — a roster entry's recipient text,
 // exactly as devices.toml holds it — identifies the same age X25519
 // recipient as self, which must already be in its canonical form (the

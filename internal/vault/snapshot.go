@@ -96,6 +96,32 @@ func rosterErr(path string, cause error) error {
 type RosterEntry struct {
 	Recipient string
 	Role      string
+	// RawRole is the role exactly as devices.toml stores it, BEFORE
+	// normalizeRole's own fail-closed default folds an unrecognized
+	// value into RoleNoSecrets: "" when the field is absent (a
+	// pre-Phase-8a entry, or a fresh full approval), or whatever
+	// string is actually on disk, valid or not. doctor's
+	// UnrecognizedRole check uses this to warn about a typo or a
+	// hand-edited manifest — a case Role alone can never distinguish
+	// from a deliberate no-secrets entry, since both normalize to the
+	// same value.
+	RawRole string
+}
+
+// UnrecognizedRole reports whether raw — one roster entry's RawRole,
+// exactly as devices.toml holds it — is neither absent nor a
+// recognized role (RoleFull or RoleNoSecrets). normalizeRole already
+// fails closed on such a value (it reads as RoleNoSecrets, so a typo
+// can never leak a secret), but that silent fallback would otherwise
+// hide a real mistake forever. doctor calls this to surface it
+// instead.
+func UnrecognizedRole(raw string) bool {
+	switch raw {
+	case "", RoleFull, RoleNoSecrets:
+		return false
+	default:
+		return true
+	}
 }
 
 // readRosterFile reads and decodes devices.toml into its on-disk
@@ -123,7 +149,7 @@ func ReadRosterEntries(v *Vault) (map[string]RosterEntry, error) {
 	}
 	entries := make(map[string]RosterEntry, len(rf.Devices))
 	for name, d := range rf.Devices {
-		entries[name] = RosterEntry{Recipient: d.Recipient, Role: normalizeRole(d.Role)}
+		entries[name] = RosterEntry{Recipient: d.Recipient, Role: normalizeRole(d.Role), RawRole: d.Role}
 	}
 	return entries, nil
 }

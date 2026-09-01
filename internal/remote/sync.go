@@ -258,6 +258,60 @@ func pullMergePush(v *vault.Vault, client *Client, remoteVersion, baseCommit str
 	if err := mergeInto(v.Root, tmp, baseCommit); err != nil {
 		return Result{}, err
 	}
+
+	// THE CRITICAL FIX (2026-09-01 whole-branch fix wave, Attack 4): a
+	// merge's own per-path last-write-wins rule can leave a secret's
+	// value.age still naming a device devices.toml no longer trusts.
+	// Live reproduction: device C rotates secret k while C's own
+	// roster still calls victim B "full", so C's rotated value.age
+	// still lists B as a recipient; device A, concurrently, demotes B
+	// to no-secrets and re-encrypts its OWN local secrets excluding B
+	// BEFORE it ever pulls C's rotate. When A's sync then merges C's
+	// already-pushed snapshot: devices.toml stays A's own (it changed
+	// since base; C's did not, so "keep local" applies) — B correctly
+	// shows no-secrets. But secrets/k/value.age has ALSO changed on
+	// both sides since base (A's own re-encrypt, and C's rotate), so
+	// mergeInto's "both changed" rule lets the INCOMING (C's) copy
+	// win — the one still encrypted under the stale, pre-demotion
+	// roster. Nothing used to revisit value.age after that, so B could
+	// decrypt the CURRENT secret despite devices.toml already, and
+	// correctly, calling it no-secrets.
+	//
+	// The narrower-looking fix — reconcile only when devices.toml
+	// itself came out of this merge different from this device's own
+	// pre-merge copy — does NOT close this: in the scenario above,
+	// THIS device's devices.toml already carried the demotion before
+	// the merge ever ran, so the merge leaves it looking unchanged by
+	// the diff's own standard, while the secret still silently
+	// regressed via its own, independent path. So this reconciles
+	// unconditionally, on EVERY merge, not only when devices.toml
+	// itself visibly changed.
+	//
+	// Only a FULL device may reconcile: a no-secrets device cannot
+	// decrypt any secret to begin with, so ReEncryptSecrets would only
+	// skip every one of them — it has nothing to protect this way. A
+	// healthy vault always keeps at least one full device to do the
+	// reconciling instead. ReEncryptSecrets is also a fast no-op when
+	// the vault holds no secrets at all, so this costs nothing on the
+	// large majority of syncs.
+	//
+	// Accepted tradeoff: age's own encryption is randomized, so this
+	// rewrites every secret's value.age bytes on every merge a full
+	// device performs, whether or not any role actually changed — a
+	// merge that would otherwise have been a trivial, republish-free
+	// fast-forward now always mints a new version once the vault holds
+	// any secret. Correctness against a live cross-device attack
+	// outweighs that extra churn.
+	role, err := vault.SelfRole(v)
+	if err != nil {
+		return Result{}, err
+	}
+	if role == vault.RoleFull {
+		if _, err := vault.ReEncryptSecrets(v); err != nil {
+			return Result{}, err
+		}
+	}
+
 	if err := vault.Snapshot(v, fmt.Sprintf("sync from %s", remoteVersion)); err != nil {
 		return Result{}, err
 	}

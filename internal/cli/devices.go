@@ -320,6 +320,41 @@ func cmdDevicesApprove(out, errOut io.Writer, args []string, m mode) int {
 		return 1
 	}
 
+	// Extra guarantee for a no-secrets outcome specifically (the
+	// Critical finding's own belt-and-suspenders): remote.Sync above
+	// may have pulled and merged a concurrent change, and its own
+	// merge path already reconciles every secret to the merged roster
+	// whenever this device is full (see internal/remote/sync.go's
+	// pullMergePush). This call site checks it again anyway, rather
+	// than trust that path alone: re-run ReEncryptSecrets against the
+	// roster as it now stands, snapshot, and push the result, so the
+	// final state on the remote can never retain the just-demoted
+	// device as a secret's recipient. This is idempotent — a no-op
+	// write in effect when nothing needed fixing — and correct over
+	// clever: it costs one more encrypt-and-sync round on a rare admin
+	// action, never a hot loop.
+	if result.role == vault.RoleNoSecrets {
+		self, err := vault.SelfRole(v)
+		if err != nil {
+			fmt.Fprintln(errOut, err)
+			return 1
+		}
+		if self == vault.RoleFull {
+			if _, err := vault.ReEncryptSecrets(v); err != nil {
+				fmt.Fprintln(errOut, err)
+				return 1
+			}
+			if err := vault.Snapshot(v, "reconcile secrets after "+name+"'s no-secrets approval"); err != nil {
+				fmt.Fprintln(errOut, err)
+				return 1
+			}
+			if _, err := remote.Sync(v); err != nil {
+				fmt.Fprintln(errOut, err)
+				return 1
+			}
+		}
+	}
+
 	if m == modeJSON {
 		printJSON(out, devicesApproveResult{
 			Name:        name,
