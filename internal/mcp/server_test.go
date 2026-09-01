@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -210,5 +211,54 @@ func TestServeNotificationGetsNoResponse(t *testing.T) {
 	}
 	if string(msgs[0].ID) != "6" {
 		t.Fatalf("want the sole response's id to be 6, got %s", msgs[0].ID)
+	}
+}
+
+// TestServeOversizedLineSurvives proves a line over Serve's message
+// size cap does not end the session: it gets a "message too large"
+// error (id null, since a line that big is never parsed for an id),
+// and the loop still answers the request on the next line.
+func TestServeOversizedLineSurvives(t *testing.T) {
+	v := testVault(t)
+	oversized := strings.Repeat("a", 8<<20+1) // one byte over the 8 MiB cap
+	msgs, err := serve(t, v,
+		oversized,
+		`{"jsonrpc":"2.0","id":7,"method":"initialize"}`,
+	)
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("want 2 responses (one too-large error, one initialize result), got %d", len(msgs))
+	}
+	if msgs[0].Error == nil || msgs[0].Error.Code != -32600 {
+		t.Fatalf("want the first response to be a -32600 message-too-large error, got %+v", msgs[0])
+	}
+	if string(msgs[0].ID) != "null" {
+		t.Fatalf("want the too-large error's id to be null, got %s", msgs[0].ID)
+	}
+	if msgs[1].Error != nil {
+		t.Fatalf("want the second response (initialize) to succeed, got error %+v", msgs[1].Error)
+	}
+	if string(msgs[1].ID) != "7" {
+		t.Fatalf("want the second response's id to be 7, got %s", msgs[1].ID)
+	}
+}
+
+// errWriter is an io.Writer whose every Write fails with err, for
+// proving Serve propagates a broken output channel instead of
+// swallowing it.
+type errWriter struct{ err error }
+
+func (w *errWriter) Write(p []byte) (int, error) { return 0, w.err }
+
+func TestServePropagatesAWriteError(t *testing.T) {
+	v := testVault(t)
+	wantErr := errors.New("boom: the pipe is closed")
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}` + "\n")
+
+	err := mcp.Serve(v, in, &errWriter{err: wantErr})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("want Serve to return the write error %v, got %v", wantErr, err)
 	}
 }

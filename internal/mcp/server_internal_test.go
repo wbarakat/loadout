@@ -119,7 +119,9 @@ func TestHandleLineWritesNothingForANotification(t *testing.T) {
 	reg := NewRegistry()
 	var out bytes.Buffer
 	enc := json.NewEncoder(&out)
-	handleLine(reg, []byte(`{"jsonrpc":"2.0","method":"whatever/unknown"}`), enc)
+	if err := handleLine(reg, []byte(`{"jsonrpc":"2.0","method":"whatever/unknown"}`), enc); err != nil {
+		t.Fatalf("handleLine: %v", err)
+	}
 	if out.Len() != 0 {
 		t.Fatalf("want no output for a notification, got %q", out.String())
 	}

@@ -7,6 +7,10 @@
 // line, both ways. MCP also allows Content-Length framing (as used by
 // LSP), but newline-delimited JSON needs no extra header parsing and
 // every MCP stdio client accepts it, so this server uses it alone.
+//
+// A single line is capped at maxMessageBytes. A longer line is not a
+// fatal error: Serve discards it and answers with a "message too
+// large" error, then keeps serving the messages that follow.
 package mcp
 
 import (
@@ -28,12 +32,23 @@ const (
 )
 
 // Standard JSON-RPC 2.0 error codes. See
-// https://www.jsonrpc.org/specification#error_object.
+// https://www.jsonrpc.org/specification#error_object. errMessageTooLarge
+// reuses "Invalid Request": JSON-RPC defines no code of its own for an
+// oversized message.
 const (
 	errParse          = -32700
+	errInvalidRequest = -32600
 	errMethodNotFound = -32601
 	errInvalidParams  = -32602
 )
+
+const errMessageTooLarge = errInvalidRequest
+
+// maxMessageBytes caps a single JSON-RPC message (one line). A line
+// longer than this is never buffered in full: readMessage discards it
+// as it drains to the next newline, so one oversized message costs
+// bounded memory rather than growing without limit.
+const maxMessageBytes = 8 << 20 // 8 MiB
 
 // request is one JSON-RPC 2.0 request or notification. A request
 // carries an id; a notification does not. rawID holds the id exactly
@@ -116,38 +131,81 @@ func registerTools(reg *Registry, v *vault.Vault) {
 // messages from in, dispatches each to the matching method or tool,
 // and writes one JSON-RPC response per line to out. A notification
 // (a message with no "id") gets no response, per the JSON-RPC spec.
-// Malformed JSON on a line produces a parse-error response and does
-// not stop the loop. Serve returns nil when in reaches EOF, and any
-// other error reading in otherwise.
+// Malformed JSON on a line, or a line over maxMessageBytes, produces
+// an error response and does not stop the loop. Serve returns nil
+// when in reaches EOF; it returns an error when in fails to read, or
+// when out fails to take a response — a broken output channel means
+// the session cannot continue, so Serve ends it rather than silently
+// dropping replies until EOF.
 func Serve(v *vault.Vault, in io.Reader, out io.Writer) error {
 	reg := NewRegistry()
 	registerTools(reg, v)
 
-	scanner := bufio.NewScanner(in)
-	// A tool's input or output can exceed bufio.Scanner's 64KB
-	// default; grow the buffer so a long line is read whole rather
-	// than rejected as "token too long".
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	reader := bufio.NewReaderSize(in, 64*1024)
 	enc := json.NewEncoder(out)
 
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
+	for {
+		line, tooLong, readErr := readMessage(reader, maxMessageBytes)
+		switch {
+		case tooLong:
+			if werr := writeResponse(enc, json.RawMessage("null"), nil, &rpcError{Code: errMessageTooLarge, Message: "message too large"}); werr != nil {
+				return werr
+			}
+		default:
+			if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
+				if werr := handleLine(reg, trimmed, enc); werr != nil {
+					return werr
+				}
+			}
 		}
-		handleLine(reg, line, enc)
+		if readErr != nil {
+			if readErr == io.EOF {
+				return nil
+			}
+			return readErr
+		}
 	}
-	return scanner.Err()
+}
+
+// readMessage reads one newline-terminated message from r, up to max
+// bytes. A message no longer than max is returned in full (with its
+// trailing line ending stripped) with tooLong false. A message longer
+// than max is never held in memory past max bytes: readMessage keeps
+// reading and discarding until it finds the next newline (or a read
+// error), returns tooLong true, and line is nil. readErr carries any
+// error reading r, most commonly io.EOF on the final message; a
+// message was still read (or found too long) when readErr is non-nil,
+// so the caller must handle line/tooLong before checking readErr.
+func readMessage(r *bufio.Reader, max int) (line []byte, tooLong bool, readErr error) {
+	var buf []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if !tooLong {
+			if len(buf)+len(chunk) > max {
+				tooLong = true
+				buf = nil
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		switch err {
+		case nil:
+			return bytes.TrimRight(buf, "\r\n"), tooLong, nil
+		case bufio.ErrBufferFull:
+			continue
+		default:
+			return buf, tooLong, err
+		}
+	}
 }
 
 // handleLine parses one line as a JSON-RPC message and writes its
-// response through enc. It writes nothing for a notification (a
-// message with no "id").
-func handleLine(reg *Registry, line []byte, enc *json.Encoder) {
+// response through enc, returning any error writing it. It writes
+// nothing for a notification (a message with no "id").
+func handleLine(reg *Registry, line []byte, enc *json.Encoder) error {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(line, &probe); err != nil {
-		writeResponse(enc, json.RawMessage("null"), nil, &rpcError{Code: errParse, Message: "parse error"})
-		return
+		return writeResponse(enc, json.RawMessage("null"), nil, &rpcError{Code: errParse, Message: "parse error"})
 	}
 	rawID, isRequest := probe["id"]
 
@@ -157,18 +215,18 @@ func handleLine(reg *Registry, line []byte, enc *json.Encoder) {
 		// (for example "method" is not a string). Treat it the
 		// same as a parse error: the message is unusable.
 		if isRequest {
-			writeResponse(enc, rawID, nil, &rpcError{Code: errParse, Message: "parse error"})
+			return writeResponse(enc, rawID, nil, &rpcError{Code: errParse, Message: "parse error"})
 		}
-		return
+		return nil
 	}
 
 	result, rpcErr := dispatch(reg, req)
 	if !isRequest {
 		// A notification never gets a reply, even one carrying an
 		// error, per the JSON-RPC spec.
-		return
+		return nil
 	}
-	writeResponse(enc, rawID, result, rpcErr)
+	return writeResponse(enc, rawID, result, rpcErr)
 }
 
 // dispatch runs one request's method and returns either its result or
@@ -279,14 +337,17 @@ func dispatchToolCall(reg *Registry, params json.RawMessage) (any, *rpcError) {
 	}, nil
 }
 
-// writeResponse writes one JSON-RPC 2.0 response line to enc. result
-// and rpcErr are mutually exclusive; passing both is a programming
-// error in dispatch, not something a caller does at runtime.
-func writeResponse(enc *json.Encoder, id json.RawMessage, result any, rpcErr *rpcError) {
+// writeResponse writes one JSON-RPC 2.0 response line to enc and
+// returns any error doing so. result and rpcErr are mutually
+// exclusive; passing both is a programming error in dispatch, not
+// something a caller does at runtime.
+//
+// enc.Encode's error is never swallowed: enc wraps Serve's out, not
+// its in, so a write failure here would otherwise go unnoticed until
+// in reaches EOF and Serve returns nil as if every reply had gone
+// out. Serve instead returns this error directly, ending the session:
+// a broken output channel cannot be recovered from mid-loop.
+func writeResponse(enc *json.Encoder, id json.RawMessage, result any, rpcErr *rpcError) error {
 	resp := response{JSONRPC: "2.0", ID: id, Result: result, Error: rpcErr}
-	// json.Encoder.Encode never fails to write to an in-memory or
-	// pipe writer for the message shapes this server produces; a
-	// failure here means out itself is broken, which the caller
-	// (Serve's scanner loop on the next read) will surface.
-	_ = enc.Encode(resp)
+	return enc.Encode(resp)
 }
