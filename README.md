@@ -60,9 +60,9 @@ lists every verb Loadout supports today.
 | `remote` | Show the configured remote and the last synced version. |
 | `remote add <url> <token>` | Configure the remote this vault syncs with. |
 | `join <url> <token>` | Enroll this device with a remote. It waits for approval. |
-| `devices [--json]` | Show every device: approved, waiting, or re-keyed. |
-| `devices approve <name>` | Approve a waiting device. |
-| `devices approve <name> --rotate <recipient>` | Trust a verified new key for an already-approved device. |
+| `devices [--json]` | Show every device: approved, waiting, or re-keyed, with its role. |
+| `devices approve <name> [--no-secrets]` | Approve a waiting device. Add `--no-secrets` for a device that must never read a secret. |
+| `devices approve <name> --rotate <recipient> [--no-secrets\|--full]` | Trust a verified new key for an already-approved device. Add `--no-secrets` or `--full` to change its role too. |
 | `secret add <name> --service <svc> [--hook <text>] [--rotate-after <dur>] [--by <who>]` | Add a secret. Pipe the value on stdin. |
 | `secret list [--json]` | Show every secret's metadata. Never shows a value. |
 | `secret show <name> [--reveal] [--by <who>]` | Refuse to print the value by default. Print it only with `--reveal`. |
@@ -287,8 +287,9 @@ A secret's `value.age` file syncs across your devices the same way a
 skill or a memory fact does, through `loadout sync --remote` and
 `loadoutd`. `loadoutd` stores ciphertext only. It cannot decrypt a
 secret, and neither can a device you have not approved. When you
-approve a new device, loadout re-encrypts every secret so the new
-device can read it too.
+approve a new full device, loadout re-encrypts every secret so the
+new device can read it too. A no-secrets device never joins this
+re-encryption: see "Device roles" above.
 
 ### The invariant
 
@@ -462,6 +463,50 @@ machine. Then trust it by name:
 Never trust a rotated key from the server's own device list alone. An
 evicted device can still write to that list. Verify the key on the
 device itself before you rotate to it.
+
+### Device roles
+
+Every device has a role: full or no-secrets.
+
+A full device syncs the whole vault and can read every secret. This
+is the default role, and the only role a device had before Phase 8a.
+Approve a device as full the normal way:
+
+    loadout devices approve <name>
+
+A no-secrets device syncs the whole vault too. It receives every
+skill and every memory fact. It can never read a secret's value,
+even though the secret's file still reaches it. Approve a device as
+no-secrets with a flag:
+
+    loadout devices approve <name> --no-secrets
+
+Use `--no-secrets` for a device that must use your skills and your
+memory, but must never hold a key that could leak. The Phase 8b
+browser dashboard enrolls this way: it shows your skills and your
+memory in a browser tab, but it never becomes a device that could
+expose a secret.
+
+Change a device's role by re-approving it. Run `loadout devices
+approve <name>` with no flag to promote a no-secrets device to full.
+Run `loadout devices approve <name> --no-secrets` to demote a full
+device. Either way, loadout re-encrypts every secret at once, so the
+change takes effect right away, not just on the next new secret.
+
+`loadout devices approve <name> --rotate <recipient>` keeps a
+device's current role by default. Add `--no-secrets` or `--full` to
+change the role at the same time as the key.
+
+Run `loadout devices` to see each device's role next to its state:
+
+    device-a — approved (full)
+    device-b — approved (no-secrets)
+
+**The guarantee**: loadout never encrypts a secret's value to a
+no-secrets device's key. This is not a check the device honors on
+its own — the encryption itself excludes it. A no-secrets device
+that tries to decrypt a secret fails every time, with no way around
+it short of an admin approving it as full.
 
 ### Keep every machine in sync automatically
 

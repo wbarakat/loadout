@@ -1522,3 +1522,393 @@ func TestDevicesApproveRotateReEncryptsSecretsAndRevokesOldKey(t *testing.T) {
 		t.Fatal("the OLD, rotated-out key must no longer decrypt the secret: revocation must actually drop it as a recipient")
 	}
 }
+
+// --- Task 3: approve --no-secrets, re-encrypt, and the no-secrets proof ---
+
+// readDeviceIdentity reads and parses base's own device.key, so a test
+// can attempt a raw age.Decrypt with that device's private key
+// directly — no CLI, no vault package call — the strongest possible
+// proof that a device really cannot read a secret's value.
+func readDeviceIdentity(t *testing.T, base string) *age.X25519Identity {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(base, "vault", "device.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := age.ParseX25519Identity(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity
+}
+
+// TestNoSecretsDeviceSyncsVaultButCannotDecryptSecret is the headline
+// Phase 8a proof. Full device A creates a skill, a memory fact, and a
+// dummy secret. A approves device B as --no-secrets. B syncs and
+// reads the skill and the fact — the whole vault still reaches it —
+// but can never read the secret's value, proven two ways:
+// vault.DecryptSecret itself refuses (through "secret show
+// --reveal"), and B's own raw age identity cannot decrypt the raw
+// value.age ciphertext bytes it actually holds on disk (the outer
+// snapshot syncs to every device regardless of role; only the
+// secret's own inner encryption excludes a no-secrets device). A
+// third device, C, approved normally (full), CAN decrypt the same
+// secret. Finally, A re-approves B as full — a role change on
+// re-approve, the same recipient, a different role — and after the
+// resulting re-encrypt and sync, B can now decrypt too: proof the
+// role-change path really re-encrypts, not just relabels.
+func TestNoSecretsDeviceSyncsVaultButCannotDecryptSecret(t *testing.T) {
+	ts, token := newRemoteTestServer(t)
+
+	// A: the bootstrap, full device. It creates a skill, a memory
+	// fact, and a dummy secret, then pushes all three.
+	baseA := newDeviceEnv(t)
+	useDeviceEnv(t, baseA)
+	run(t, "init")
+	writeDeviceName(t, baseA, "device-a")
+	if _, errOut, code := run(t, "remote", "add", ts.URL, token); code != 0 {
+		t.Fatalf("remote add on A failed: %s", errOut)
+	}
+	if _, errOut, code := run(t, "add", "skill", "deploy-checks"); code != 0 {
+		t.Fatalf("add skill on A failed: %s", errOut)
+	}
+	if _, errOut, code := run(t, "add", "memory", "stack"); code != 0 {
+		t.Fatalf("add memory on A failed: %s", errOut)
+	}
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "dummy-secret", "--service", "dummy"); code != 0 {
+		t.Fatalf("secret add on A failed: %s", errOut)
+	}
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on A failed: %s", errOut)
+	}
+
+	// B joins and waits.
+	baseB := newDeviceEnv(t)
+	useDeviceEnv(t, baseB)
+	run(t, "init")
+	writeDeviceName(t, baseB, "device-b")
+	if _, errOut, code := run(t, "join", ts.URL, token); code != 0 {
+		t.Fatalf("join B failed: %s", errOut)
+	}
+
+	// A approves B as no-secrets.
+	useDeviceEnv(t, baseA)
+	approveOut, approveErr, code := run(t, "devices", "approve", "device-b", "--no-secrets")
+	if code != 0 {
+		t.Fatalf("approve B --no-secrets failed: %s", approveErr)
+	}
+	if !strings.Contains(approveOut, "as no-secrets") {
+		t.Fatalf("approve output must say the device is no-secrets, got %q", approveOut)
+	}
+
+	// devices list shows each device's role.
+	out, errOut, code := run(t, "devices")
+	if code != 0 {
+		t.Fatalf("devices on A failed: %s", errOut)
+	}
+	if !strings.Contains(out, "device-b — approved (no-secrets)") {
+		t.Fatalf("devices list must show B's role as no-secrets, got %q", out)
+	}
+	if !strings.Contains(out, "device-a — approved (full)") {
+		t.Fatalf("devices list must show A's own role as full, got %q", out)
+	}
+
+	// B syncs. It must receive the whole vault — the skill and the
+	// fact both — but must never be able to decrypt the secret.
+	useDeviceEnv(t, baseB)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on B failed: %s", errOut)
+	}
+	skillData, err := os.ReadFile(filepath.Join(baseB, "vault", "skills", "deploy-checks", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("a no-secrets device must still receive the skill: %v", err)
+	}
+	if !strings.Contains(string(skillData), "deploy-checks") {
+		t.Fatalf("B's skill content looks wrong: %q", skillData)
+	}
+	factData, err := os.ReadFile(filepath.Join(baseB, "vault", "memory", "stack.md"))
+	if err != nil {
+		t.Fatalf("a no-secrets device must still receive the memory fact: %v", err)
+	}
+	if !strings.Contains(string(factData), "stack") {
+		t.Fatalf("B's fact content looks wrong: %q", factData)
+	}
+
+	// Proof 1: vault.DecryptSecret (through "secret show --reveal")
+	// refuses.
+	_, secretErr, code := run(t, "secret", "show", "dummy-secret", "--reveal")
+	if code != 1 {
+		t.Fatalf("a no-secrets device must fail to decrypt the secret, got exit %d", code)
+	}
+	if !strings.Contains(secretErr, "this device cannot read the secret") {
+		t.Fatalf("bad error for a no-secrets device's decrypt attempt: %q", secretErr)
+	}
+	if strings.Contains(secretErr, dummySecretValue) {
+		t.Fatal("the failed decrypt error must never leak the secret's value")
+	}
+
+	// Proof 2: B's own raw age identity cannot decrypt the raw
+	// value.age bytes it actually holds on disk. The outer snapshot
+	// synced the ciphertext file to B (every device gets it,
+	// regardless of role); only the secret's own inner encryption
+	// excludes B — this is the load-bearing proof, independent of
+	// vault.DecryptSecret's own error handling.
+	bIdentity := readDeviceIdentity(t, baseB)
+	ciphertext, err := os.ReadFile(filepath.Join(baseB, "vault", "secrets", "dummy-secret", "value.age"))
+	if err != nil {
+		t.Fatalf("B must still hold the secret's ciphertext on disk (the outer snapshot syncs to every device): %v", err)
+	}
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), bIdentity); err == nil {
+		t.Fatal("B's own raw age key must never decrypt the secret's value.age")
+	}
+
+	// C: a second new device, approved normally (full).
+	baseC := newDeviceEnv(t)
+	useDeviceEnv(t, baseC)
+	run(t, "init")
+	writeDeviceName(t, baseC, "device-c")
+	if _, errOut, code := run(t, "join", ts.URL, token); code != 0 {
+		t.Fatalf("join C failed: %s", errOut)
+	}
+	useDeviceEnv(t, baseA)
+	if _, errOut, code := run(t, "devices", "approve", "device-c"); code != 0 {
+		t.Fatalf("approve C failed: %s", errOut)
+	}
+	useDeviceEnv(t, baseC)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on C failed: %s", errOut)
+	}
+	got, errOut, code := run(t, "secret", "show", "dummy-secret", "--reveal")
+	if code != 0 {
+		t.Fatalf("a full device must decrypt the secret: %s", errOut)
+	}
+	if got != dummySecretValue {
+		t.Fatalf("C's decrypted secret = %q, want %q", got, dummySecretValue)
+	}
+
+	// The role change: A re-approves B as full (no --no-secrets). B's
+	// recipient is unchanged, only its role flips — the
+	// approveRoleChanged path.
+	useDeviceEnv(t, baseA)
+	roleChangeOut, errOut, code := run(t, "devices", "approve", "device-b")
+	if code != 0 {
+		t.Fatalf("re-approving B as full failed: %s", errOut)
+	}
+	if roleChangeOut != "changed device-b's role to full.\n" {
+		t.Fatalf("bad role-change output: %q", roleChangeOut)
+	}
+
+	// devices list now shows B as full.
+	out, errOut, code = run(t, "devices")
+	if code != 0 {
+		t.Fatalf("devices on A failed: %s", errOut)
+	}
+	if !strings.Contains(out, "device-b — approved (full)") {
+		t.Fatalf("devices list must show B's new role as full, got %q", out)
+	}
+
+	// After the role change's own re-encrypt and sync (both already
+	// run inside "devices approve"), B syncs and can now decrypt the
+	// secret it could not read a moment ago.
+	useDeviceEnv(t, baseB)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on B failed after the role change: %s", errOut)
+	}
+	got, errOut, code = run(t, "secret", "show", "dummy-secret", "--reveal")
+	if code != 0 {
+		t.Fatalf("B must now decrypt the secret after being promoted to full: %s", errOut)
+	}
+	if got != dummySecretValue {
+		t.Fatalf("B's decrypted secret = %q, want %q", got, dummySecretValue)
+	}
+}
+
+// TestDevicesApproveRotateKeepsExistingRoleUnlessOverridden proves
+// --rotate's role handling: a plain rotate (no role flag) keeps the
+// device's existing role, --full promotes it, and --no-secrets
+// demotes it — a rotate can always change a key, and only changes a
+// role when the admin explicitly asks for that too.
+func TestDevicesApproveRotateKeepsExistingRoleUnlessOverridden(t *testing.T) {
+	ts, token := newRemoteTestServer(t)
+
+	baseA := newDeviceEnv(t)
+	useDeviceEnv(t, baseA)
+	run(t, "init")
+	writeDeviceName(t, baseA, "device-a")
+	run(t, "remote", "add", ts.URL, token)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on A failed: %s", errOut)
+	}
+
+	baseB := newDeviceEnv(t)
+	useDeviceEnv(t, baseB)
+	run(t, "init")
+	writeDeviceName(t, baseB, "device-b")
+	if _, errOut, code := run(t, "join", ts.URL, token); code != 0 {
+		t.Fatalf("join B failed: %s", errOut)
+	}
+
+	useDeviceEnv(t, baseA)
+	if _, errOut, code := run(t, "devices", "approve", "device-b", "--no-secrets"); code != 0 {
+		t.Fatalf("approve B --no-secrets failed: %s", errOut)
+	}
+
+	v, err := vault.Open(filepath.Join(baseA, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := vault.ReadRosterEntries(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries["device-b"].Role != vault.RoleNoSecrets {
+		t.Fatalf("B must start no-secrets, got %+v", entries["device-b"])
+	}
+
+	// A plain rotate (no role flag) must KEEP the existing role.
+	newIdentity1, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, code := run(t, "devices", "approve", "device-b", "--rotate", newIdentity1.Recipient().String()); code != 0 {
+		t.Fatalf("plain rotate failed: %s", errOut)
+	}
+	entries, err = vault.ReadRosterEntries(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries["device-b"].Role != vault.RoleNoSecrets {
+		t.Fatalf("a plain rotate must keep the existing role, got %+v", entries["device-b"])
+	}
+	if entries["device-b"].Recipient != newIdentity1.Recipient().String() {
+		t.Fatalf("the rotate must still write the new recipient, got %+v", entries["device-b"])
+	}
+
+	// --rotate ... --full promotes it.
+	newIdentity2, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := run(t, "devices", "approve", "device-b", "--rotate", newIdentity2.Recipient().String(), "--full")
+	if code != 0 {
+		t.Fatalf("rotate --full failed: %s", errOut)
+	}
+	wantFull := fmt.Sprintf("rotated device-b to %s.\n", newIdentity2.Recipient().String())
+	if out != wantFull {
+		t.Fatalf("bad rotate --full output: got %q want %q", out, wantFull)
+	}
+	entries, err = vault.ReadRosterEntries(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries["device-b"].Role != vault.RoleFull {
+		t.Fatalf("--full must promote the device, got %+v", entries["device-b"])
+	}
+
+	// --rotate ... --no-secrets demotes it again.
+	newIdentity3, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code = run(t, "devices", "approve", "device-b", "--rotate", newIdentity3.Recipient().String(), "--no-secrets")
+	if code != 0 {
+		t.Fatalf("rotate --no-secrets failed: %s", errOut)
+	}
+	wantNoSecrets := fmt.Sprintf("rotated device-b to %s (no-secrets).\n", newIdentity3.Recipient().String())
+	if out != wantNoSecrets {
+		t.Fatalf("bad rotate --no-secrets output: got %q want %q", out, wantNoSecrets)
+	}
+	entries, err = vault.ReadRosterEntries(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries["device-b"].Role != vault.RoleNoSecrets {
+		t.Fatalf("--no-secrets must demote the device, got %+v", entries["device-b"])
+	}
+}
+
+// TestDevicesApproveConflictingRoleFlagsIsUsageError proves
+// "--no-secrets" and "--full" together, in either order, on a plain
+// approve or a --rotate, is a usage error: a device cannot ask for
+// both roles in the same call.
+func TestDevicesApproveConflictingRoleFlagsIsUsageError(t *testing.T) {
+	base := newDeviceEnv(t)
+	useDeviceEnv(t, base)
+	run(t, "init")
+
+	for _, args := range [][]string{
+		{"devices", "approve", "device-b", "--no-secrets", "--full"},
+		{"devices", "approve", "device-b", "--full", "--no-secrets"},
+		{"devices", "approve", "device-b", "--rotate", "some-recipient", "--no-secrets", "--full"},
+	} {
+		_, errOut, code := run(t, args...)
+		if code != 2 || !strings.Contains(errOut, "usage") {
+			t.Fatalf("%v must be a usage error, got %d %q", args, code, errOut)
+		}
+	}
+}
+
+// TestDevicesJSONIncludesRole proves the JSON shape carries role
+// information on both "devices" and "devices approve": the list's
+// per-device "role" field, and the approve result's "role" and
+// "role_changed" fields.
+func TestDevicesJSONIncludesRole(t *testing.T) {
+	ts, token := newRemoteTestServer(t)
+	baseA := newDeviceEnv(t)
+	useDeviceEnv(t, baseA)
+	run(t, "init")
+	writeDeviceName(t, baseA, "device-a")
+	run(t, "remote", "add", ts.URL, token)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote failed: %s", errOut)
+	}
+
+	baseB := newDeviceEnv(t)
+	useDeviceEnv(t, baseB)
+	run(t, "init")
+	writeDeviceName(t, baseB, "device-b")
+	if _, errOut, code := run(t, "join", ts.URL, token); code != 0 {
+		t.Fatalf("join B failed: %s", errOut)
+	}
+
+	useDeviceEnv(t, baseA)
+	approveOut, errOut, code := run(t, "devices", "approve", "device-b", "--no-secrets", "--json")
+	if code != 0 {
+		t.Fatalf("approve --json failed: %s", errOut)
+	}
+	var approveGot struct {
+		Role        string `json:"role"`
+		RoleChanged bool   `json:"role_changed"`
+	}
+	if err := json.Unmarshal([]byte(approveOut), &approveGot); err != nil {
+		t.Fatalf("approve --json did not parse: %v\noutput: %s", err, approveOut)
+	}
+	if approveGot.Role != "no-secrets" || approveGot.RoleChanged {
+		t.Fatalf("bad approve json role: %+v", approveGot)
+	}
+
+	out, errOut, code := run(t, "devices", "--json")
+	if code != 0 {
+		t.Fatalf("devices --json failed: %s", errOut)
+	}
+	var got struct {
+		Devices []struct {
+			Name  string `json:"name"`
+			Role  string `json:"role"`
+			State string `json:"state"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("devices --json did not parse: %v\noutput: %s", err, out)
+	}
+	roles := make(map[string]string, len(got.Devices))
+	for _, d := range got.Devices {
+		roles[d.Name] = d.Role
+	}
+	if roles["device-a"] != "full" {
+		t.Fatalf("device-a must show role full, got %+v", roles)
+	}
+	if roles["device-b"] != "no-secrets" {
+		t.Fatalf("device-b must show role no-secrets, got %+v", roles)
+	}
+}
