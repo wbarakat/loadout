@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -26,8 +27,31 @@ func TestParseSecretAddArgsFullShape(t *testing.T) {
 		t.Fatal("must parse")
 	}
 	want := secretAddArgs{name: "my-key", service: "svc", hook: "a hook", rotateAfter: "24h", by: "pi"}
-	if a != want {
+	if !reflect.DeepEqual(a, want) {
 		t.Fatalf("got %+v, want %+v", a, want)
+	}
+}
+
+// TestParseSecretAddArgsAllowedHosts proves --allowed-hosts splits on
+// comma, trims spaces, and drops empty entries; absent, it parses as
+// nil — no host permitted, the fail-closed default the broker relies
+// on.
+func TestParseSecretAddArgsAllowedHosts(t *testing.T) {
+	a, ok := parseSecretAddArgs([]string{"my-key", "--service", "svc", "--allowed-hosts", "api.example.com, other.example.com:8443,,"})
+	if !ok {
+		t.Fatal("must parse")
+	}
+	want := []string{"api.example.com", "other.example.com:8443"}
+	if !reflect.DeepEqual(a.allowedHosts, want) {
+		t.Fatalf("allowedHosts = %v, want %v", a.allowedHosts, want)
+	}
+
+	a2, ok := parseSecretAddArgs([]string{"my-key", "--service", "svc"})
+	if !ok {
+		t.Fatal("must parse")
+	}
+	if a2.allowedHosts != nil {
+		t.Fatalf("allowedHosts absent must be nil, got %v", a2.allowedHosts)
 	}
 }
 
@@ -255,7 +279,7 @@ func TestSecretRotateRefusesTTYStdin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddSecret(v, "my-key", "svc", "", "", "human", []byte("original-value")); err != nil {
+	if err := vault.AddSecret(v, "my-key", "svc", "", "", "human", nil, []byte("original-value")); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(filepath.Join(v.SecretsDir(), "my-key", "value.age"))

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func deviceIdentityFor(t *testing.T, v *vault.Vault) *age.X25519Identity {
 func TestAddSecretWritesBothFiles(t *testing.T) {
 	v := newVault(t)
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "", "human", nil, value); err != nil {
 		t.Fatal(err)
 	}
 
@@ -66,7 +67,7 @@ func TestAddSecretWritesBothFiles(t *testing.T) {
 func TestAddSecretValueAbsentFromDisk(t *testing.T) {
 	v := newVault(t)
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, value); err != nil {
 		t.Fatal(err)
 	}
 
@@ -93,7 +94,7 @@ func TestAddSecretValueAbsentFromDisk(t *testing.T) {
 func TestAddSecretZeroesCallerBuffer(t *testing.T) {
 	v := newVault(t)
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, value); err != nil {
 		t.Fatal(err)
 	}
 	for i, b := range value {
@@ -110,7 +111,7 @@ func TestAddSecretZeroesCallerBuffer(t *testing.T) {
 func TestAddSecretValueDecryptsWithDeviceKey(t *testing.T) {
 	v := newVault(t)
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, value); err != nil {
 		t.Fatal(err)
 	}
 
@@ -154,7 +155,7 @@ func TestAddSecretEncryptsToEveryRosterRecipient(t *testing.T) {
 	}
 
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, value); err != nil {
 		t.Fatal(err)
 	}
 
@@ -192,7 +193,7 @@ func TestAddSecretAlwaysIncludesSelfEvenWhenNotEnrolled(t *testing.T) {
 	}
 
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, value); err != nil {
 		t.Fatal(err)
 	}
 
@@ -216,17 +217,17 @@ func TestAddSecretAlwaysIncludesSelfEvenWhenNotEnrolled(t *testing.T) {
 
 func TestAddSecretDuplicateRefused(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err == nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err == nil {
 		t.Fatal("a duplicate secret name must be refused")
 	}
 }
 
 func TestAddSecretBadNameRefused(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "Bad Name", "openai", "", "", "human", []byte(dummySecretValue)); err == nil {
+	if err := vault.AddSecret(v, "Bad Name", "openai", "", "", "human", nil, []byte(dummySecretValue)); err == nil {
 		t.Fatal("a non-kebab-case name must be refused")
 	}
 	if vault.SecretExists(v, "Bad Name") {
@@ -236,10 +237,10 @@ func TestAddSecretBadNameRefused(t *testing.T) {
 
 func TestListSecretsMetadataOnly(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "zebra-key", "svc-z", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "zebra-key", "svc-z", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddSecret(v, "alpha-key", "svc-a", "", "", "claude-code", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "alpha-key", "svc-a", "", "", "claude-code", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -305,7 +306,7 @@ func TestAddSecretRecoversFromIncompleteDirectory(t *testing.T) {
 		t.Fatalf("ListSecrets must not surface an incomplete directory, got %v", secrets)
 	}
 
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatalf("AddSecret must recover from a stale incomplete directory: %v", err)
 	}
 	if !vault.SecretExists(v, "openai-key") {
@@ -361,7 +362,7 @@ func TestListSecretsSkipsTempDirectories(t *testing.T) {
 // device.key.
 func TestAddSecretValueFileMode0600(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
@@ -378,7 +379,7 @@ func TestSecretExists(t *testing.T) {
 	if vault.SecretExists(v, "openai-key") {
 		t.Fatal("SecretExists must be false before AddSecret")
 	}
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	if !vault.SecretExists(v, "openai-key") {
@@ -388,7 +389,7 @@ func TestSecretExists(t *testing.T) {
 
 func TestRemoveSecretDeletesDir(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	if err := vault.RemoveSecret(v, "openai-key"); err != nil {
@@ -426,7 +427,7 @@ func TestSecretsAreTrackedAccessLogIsGitignored(t *testing.T) {
 		t.Fatalf("access.log must be gitignored, got:\n%s", gitignore)
 	}
 
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(v.Root, "access.log"), []byte(`{"secret":"openai-key"}`+"\n"), 0o600); err != nil {
@@ -461,7 +462,7 @@ func TestSecretsAreTrackedAccessLogIsGitignored(t *testing.T) {
 // afterward too.
 func TestReEncryptSecretsAddsNewRecipient(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -524,7 +525,7 @@ func TestReEncryptSecretsAddsNewRecipient(t *testing.T) {
 // ever rewrites value.age: meta.md's bytes are untouched.
 func TestReEncryptSecretsLeavesMetaUnchanged(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	metaPath := filepath.Join(v.SecretsDir(), "openai-key", "meta.md")
@@ -561,7 +562,7 @@ func TestReEncryptSecretsLeavesMetaUnchanged(t *testing.T) {
 // re-encrypted normally in the same call.
 func TestReEncryptSecretsSkipsUndecryptableSecretByNameOnly(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -689,7 +690,7 @@ func TestSecretDueFalseOnUnparseableFields(t *testing.T) {
 // by untouched, and advances at to a fresh timestamp.
 func TestRotateSecretReplacesValueKeepsMetaUpdatesAt(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "24h", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "24h", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "meta.md"))
@@ -702,7 +703,7 @@ func TestRotateSecretReplacesValueKeepsMetaUpdatesAt(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 
 	const newValue = "rotated-secret-value-456"
-	if err := vault.RotateSecret(v, "openai-key", []byte(newValue)); err != nil {
+	if err := vault.RotateSecret(v, "openai-key", nil, []byte(newValue)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -745,11 +746,11 @@ func TestRotateSecretReplacesValueKeepsMetaUpdatesAt(t *testing.T) {
 // caller's new-value buffer, the same as AddSecret.
 func TestRotateSecretZeroesCallerBuffer(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	newValue := []byte("rotated-value")
-	if err := vault.RotateSecret(v, "openai-key", newValue); err != nil {
+	if err := vault.RotateSecret(v, "openai-key", nil, newValue); err != nil {
 		t.Fatal(err)
 	}
 	for i, b := range newValue {
@@ -763,7 +764,7 @@ func TestRotateSecretZeroesCallerBuffer(t *testing.T) {
 // it does not create one: a name that was never added is refused.
 func TestRotateSecretRefusesNonexistent(t *testing.T) {
 	v := newVault(t)
-	if err := vault.RotateSecret(v, "no-such-key", []byte("x")); err == nil {
+	if err := vault.RotateSecret(v, "no-such-key", nil, []byte("x")); err == nil {
 		t.Fatal("RotateSecret must refuse a name that does not exist")
 	}
 }
@@ -774,7 +775,7 @@ func TestRotateSecretRefusesNonexistent(t *testing.T) {
 // the rotated value.
 func TestRotateSecretEncryptsToCurrentRoster(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	newcomer, err := age.GenerateX25519Identity()
@@ -786,7 +787,7 @@ func TestRotateSecretEncryptsToCurrentRoster(t *testing.T) {
 	}
 
 	const newValue = "rotated-secret-value-789"
-	if err := vault.RotateSecret(v, "openai-key", []byte(newValue)); err != nil {
+	if err := vault.RotateSecret(v, "openai-key", nil, []byte(newValue)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -850,10 +851,10 @@ func TestPathTraversalNameRefusedByEveryVerb(t *testing.T) {
 	if _, err := vault.DecryptSecret(v, hostileName); err == nil {
 		t.Fatal("DecryptSecret must refuse a path-traversal name")
 	}
-	if err := vault.RotateSecret(v, hostileName, []byte("x")); err == nil {
+	if err := vault.RotateSecret(v, hostileName, nil, []byte("x")); err == nil {
 		t.Fatal("RotateSecret must refuse a path-traversal name")
 	}
-	if err := vault.AddSecret(v, hostileName, "svc", "", "", "human", []byte("x")); err == nil {
+	if err := vault.AddSecret(v, hostileName, "svc", "", "", "human", nil, []byte("x")); err == nil {
 		t.Fatal("AddSecret must refuse a path-traversal name")
 	}
 
@@ -898,7 +899,7 @@ func TestDecryptSecretWrapsUnreadableValueFileError(t *testing.T) {
 		t.Skip("root can read a file regardless of its permissions")
 	}
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	valuePath := filepath.Join(v.SecretsDir(), "openai-key", "value.age")
@@ -930,5 +931,191 @@ func TestReEncryptSecretsOnEmptyVault(t *testing.T) {
 	}
 	if len(skipped) != 0 {
 		t.Fatalf("skipped = %v, want none", skipped)
+	}
+}
+
+// TestValidateAllowedHostAcceptsBareHostAndHostPort proves a bare
+// host and a host:port both pass — the two shapes the broker's own
+// exact-match check expects an allowed_hosts entry to take.
+func TestValidateAllowedHostAcceptsBareHostAndHostPort(t *testing.T) {
+	for _, host := range []string{"api.example.com", "api.example.com:8443", "127.0.0.1:9090", "localhost"} {
+		if err := vault.ValidateAllowedHost(host); err != nil {
+			t.Fatalf("ValidateAllowedHost(%q) = %v, want nil", host, err)
+		}
+	}
+}
+
+// TestValidateAllowedHostRejectsSchemePathWildcardSpace proves every
+// shape the broker must never be able to misread as a bare host is
+// refused: a scheme, a path, a wildcard, a space, and empty.
+func TestValidateAllowedHostRejectsSchemePathWildcardSpace(t *testing.T) {
+	for _, host := range []string{
+		"https://api.example.com",
+		"api.example.com/path",
+		"*.example.com",
+		"api example.com",
+		"",
+	} {
+		if err := vault.ValidateAllowedHost(host); err == nil {
+			t.Fatalf("ValidateAllowedHost(%q) = nil, want an error", host)
+		}
+	}
+}
+
+// TestAddSecretStoresAllowedHosts proves AddSecret writes
+// allowed_hosts to meta.md and ListSecrets reads it back exactly.
+func TestAddSecretStoresAllowedHosts(t *testing.T) {
+	v := newVault(t)
+	hosts := []string{"api.example.com", "other.example.com:8443"}
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", hosts, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := vault.ListSecrets(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 1 {
+		t.Fatalf("want 1 secret, got %d", len(secrets))
+	}
+	if !reflect.DeepEqual(secrets[0].AllowedHosts, hosts) {
+		t.Fatalf("AllowedHosts = %v, want %v", secrets[0].AllowedHosts, hosts)
+	}
+}
+
+// TestAddSecretAllowedHostsAbsentIsNil proves a secret added with no
+// allowed_hosts at all comes back as an empty AllowedHosts — the
+// fail-closed default the broker relies on.
+func TestAddSecretAllowedHostsAbsentIsNil(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := vault.ListSecrets(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets[0].AllowedHosts) != 0 {
+		t.Fatalf("AllowedHosts = %v, want none", secrets[0].AllowedHosts)
+	}
+}
+
+// TestAddSecretRejectsInvalidAllowedHost proves an invalid
+// allowed_hosts entry refuses the whole add, writing nothing.
+func TestAddSecretRejectsInvalidAllowedHost(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []string{"https://evil.example"}, []byte(dummySecretValue)); err == nil {
+		t.Fatal("an invalid allowed_hosts entry must be refused")
+	}
+	if vault.SecretExists(v, "openai-key") {
+		t.Fatal("a refused add must not create anything")
+	}
+}
+
+// TestRotateSecretPreservesAllowedHostsWhenNotGiven proves rotate's
+// "keep unless given" rule: a nil allowedHosts argument leaves the
+// secret's existing allowed_hosts unchanged, the same way service,
+// hook, and rotate_after are always preserved.
+func TestRotateSecretPreservesAllowedHostsWhenNotGiven(t *testing.T) {
+	v := newVault(t)
+	hosts := []string{"api.example.com"}
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", hosts, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.RotateSecret(v, "openai-key", nil, []byte("rotated-value")); err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := vault.ListSecrets(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(secrets[0].AllowedHosts, hosts) {
+		t.Fatalf("AllowedHosts after rotate = %v, want unchanged %v", secrets[0].AllowedHosts, hosts)
+	}
+}
+
+// TestRotateSecretReplacesAllowedHostsWhenGiven proves a non-nil
+// allowedHosts argument replaces the secret's allowed_hosts, even
+// with an empty slice (clearing every host back to fail-closed).
+func TestRotateSecretReplacesAllowedHostsWhenGiven(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []string{"old.example.com"}, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	newHosts := []string{"new.example.com"}
+	if err := vault.RotateSecret(v, "openai-key", newHosts, []byte("rotated-value")); err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := vault.ListSecrets(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(secrets[0].AllowedHosts, newHosts) {
+		t.Fatalf("AllowedHosts after rotate = %v, want %v", secrets[0].AllowedHosts, newHosts)
+	}
+
+	if err := vault.RotateSecret(v, "openai-key", []string{}, []byte("rotated-again")); err != nil {
+		t.Fatal(err)
+	}
+	secrets, err = vault.ListSecrets(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets[0].AllowedHosts) != 0 {
+		t.Fatalf("AllowedHosts after clearing = %v, want none", secrets[0].AllowedHosts)
+	}
+}
+
+// TestRotateSecretRejectsInvalidAllowedHost proves an invalid
+// allowed_hosts entry refuses the whole rotate, leaving the old value
+// and metadata untouched.
+func TestRotateSecretRejectsInvalidAllowedHost(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []string{"good.example.com"}, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := vault.RotateSecret(v, "openai-key", []string{"bad host with space"}, []byte("rotated-value")); err == nil {
+		t.Fatal("an invalid allowed_hosts entry must be refused")
+	}
+
+	after, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a refused rotate must never touch the existing value")
+	}
+}
+
+// TestSecretMetaReadsWithoutTouchingValue proves SecretMeta returns
+// the same metadata ListSecrets does, without decrypting value.age.
+func TestSecretMetaReadsWithoutTouchingValue(t *testing.T) {
+	v := newVault(t)
+	hosts := []string{"api.example.com"}
+	if err := vault.AddSecret(v, "openai-key", "openai", "a hook", "24h", "human", hosts, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := vault.SecretMeta(v, "openai-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Name != "openai-key" || meta.Service != "openai" || meta.Hook != "a hook" || meta.RotateAfter != "24h" {
+		t.Fatalf("bad metadata: %+v", meta)
+	}
+	if !reflect.DeepEqual(meta.AllowedHosts, hosts) {
+		t.Fatalf("AllowedHosts = %v, want %v", meta.AllowedHosts, hosts)
+	}
+}
+
+// TestSecretMetaMissingRefused proves SecretMeta refuses a name that
+// does not exist, the same message shape DecryptSecret uses.
+func TestSecretMetaMissingRefused(t *testing.T) {
+	v := newVault(t)
+	if _, err := vault.SecretMeta(v, "no-such-secret"); err == nil {
+		t.Fatal("SecretMeta must refuse a name that does not exist")
 	}
 }

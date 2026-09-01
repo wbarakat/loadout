@@ -23,6 +23,12 @@ type Secret struct {
 	RotateAfter string
 	By          string
 	At          string
+	// AllowedHosts lists the exact hosts (a bare host, or host:port)
+	// the brokered http_request MCP tool may send this secret's value
+	// to. An empty list means the broker must refuse every request
+	// that references this secret: fail closed until an operator
+	// opts a host in explicitly. See internal/mcp/broker.go.
+	AllowedHosts []string
 }
 
 // secretDir returns the directory that holds one secret's two files:
@@ -64,6 +70,54 @@ func ValidateSecretName(name string) error {
 		return fmt.Errorf("%s: not a valid secret name. Fix: use a kebab-case name like openai-key.", name)
 	}
 	return nil
+}
+
+// ValidateAllowedHost reports whether host is a valid allowed_hosts
+// entry for a secret: a bare host, or host:port. It must carry no
+// scheme, no path, no space, and no wildcard — the broker
+// (internal/mcp/broker.go) compares a request's host against this
+// string with a plain, exact, case-insensitive equality check, so
+// anything shaped like a URL or a pattern here would mislead rather
+// than help.
+func ValidateAllowedHost(host string) error {
+	invalid := host == "" ||
+		strings.ContainsAny(host, " \t\r\n") ||
+		strings.Contains(host, "://") ||
+		strings.Contains(host, "/") ||
+		strings.Contains(host, "*")
+	if invalid {
+		return fmt.Errorf("%s: not a valid allowed host. Fix: use a bare host like api.example.com or api.example.com:8443 — no scheme, no path, no wildcard.", host)
+	}
+	return nil
+}
+
+// validateAllowedHosts validates every host in hosts, in order,
+// returning the first error found.
+func validateAllowedHosts(hosts []string) error {
+	for _, h := range hosts {
+		if err := ValidateAllowedHost(h); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// parseAllowedHosts splits meta.md's raw "allowed_hosts" frontmatter
+// value into a slice: comma-separated, each entry trimmed of spaces,
+// empty entries dropped. An absent or empty field parses as no hosts
+// at all — the fail-closed default the broker relies on.
+func parseAllowedHosts(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var hosts []string
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			hosts = append(hosts, part)
+		}
+	}
+	return hosts
 }
 
 // SecretExists reports whether a secret named name has BOTH its
@@ -110,8 +164,8 @@ func secretRecipients(v *Vault) ([]age.Recipient, error) {
 
 // renderSecretMeta builds a secret's plaintext meta.md frontmatter.
 // It NEVER holds the secret value: only name, service, hook,
-// rotate_after, by, and at.
-func renderSecretMeta(name, service, hook, rotateAfter, by, at string) string {
+// rotate_after, by, at, and allowed_hosts.
+func renderSecretMeta(name, service, hook, rotateAfter, by, at string, allowedHosts []string) string {
 	return "---\n" +
 		"name: " + name + "\n" +
 		"service: " + service + "\n" +
@@ -119,6 +173,7 @@ func renderSecretMeta(name, service, hook, rotateAfter, by, at string) string {
 		"rotate_after: " + rotateAfter + "\n" +
 		"by: " + by + "\n" +
 		"at: " + at + "\n" +
+		"allowed_hosts: " + strings.Join(allowedHosts, ",") + "\n" +
 		"---\n"
 }
 
@@ -137,9 +192,15 @@ func renderSecretMeta(name, service, hook, rotateAfter, by, at string) string {
 // leaves only an orphaned temp directory behind, never a half-written
 // secrets/<name> that SecretExists would wrongly treat as real.
 //
+// allowedHosts lists the exact hosts the brokered http_request MCP
+// tool may later send this secret's value to (see
+// internal/mcp/broker.go); an empty list means the broker must
+// refuse every request that references this secret. Each entry is
+// validated by ValidateAllowedHost before anything is written.
+//
 // INVARIANT 10: value never appears anywhere on disk except as
 // ciphertext inside value.age, and never in an error message.
-func AddSecret(v *Vault, name, service, hook, rotateAfter, by string, value []byte) error {
+func AddSecret(v *Vault, name, service, hook, rotateAfter, by string, allowedHosts []string, value []byte) error {
 	defer func() {
 		for i := range value {
 			value[i] = 0
@@ -147,6 +208,9 @@ func AddSecret(v *Vault, name, service, hook, rotateAfter, by string, value []by
 	}()
 
 	if err := ValidateSecretName(name); err != nil {
+		return err
+	}
+	if err := validateAllowedHosts(allowedHosts); err != nil {
 		return err
 	}
 	if SecretExists(v, name) {
@@ -189,7 +253,7 @@ func AddSecret(v *Vault, name, service, hook, rotateAfter, by string, value []by
 	defer os.RemoveAll(tmpDir) // no-op once the rename below succeeds
 
 	at := time.Now().UTC().Format(time.RFC3339)
-	meta := renderSecretMeta(name, service, hook, rotateAfter, by, at)
+	meta := renderSecretMeta(name, service, hook, rotateAfter, by, at, allowedHosts)
 	if err := os.WriteFile(filepath.Join(tmpDir, "meta.md"), []byte(meta), 0o644); err != nil {
 		return err
 	}
@@ -216,13 +280,29 @@ func readSecretMeta(v *Vault, dirName string) (Secret, error) {
 		name = dirName
 	}
 	return Secret{
-		Name:        name,
-		Service:     fields["service"],
-		Hook:        fields["hook"],
-		RotateAfter: fields["rotate_after"],
-		By:          fields["by"],
-		At:          fields["at"],
+		Name:         name,
+		Service:      fields["service"],
+		Hook:         fields["hook"],
+		RotateAfter:  fields["rotate_after"],
+		By:           fields["by"],
+		At:           fields["at"],
+		AllowedHosts: parseAllowedHosts(fields["allowed_hosts"]),
 	}, nil
+}
+
+// SecretMeta reads one secret's plaintext metadata by name, without
+// touching its encrypted value.age. It refuses an invalid name, and a
+// name with no such secret, exactly as DecryptSecret does for those
+// two cases — used by the MCP broker (internal/mcp/broker.go) to
+// check a secret's allowed_hosts before ever deciding to decrypt it.
+func SecretMeta(v *Vault, name string) (Secret, error) {
+	if err := ValidateSecretName(name); err != nil {
+		return Secret{}, err
+	}
+	if !SecretExists(v, name) {
+		return Secret{}, fmt.Errorf("secret/%s: no such secret. Fix: run loadout secret list.", name)
+	}
+	return readSecretMeta(v, name)
 }
 
 // ListSecrets reads every secret's metadata, in name order. It never
@@ -476,6 +556,11 @@ func writeSecretMeta(v *Vault, name, content string) error {
 // CURRENT device roster (secretRecipients: roster ∪ self) — the write
 // path AddSecret and ReEncryptSecrets both use.
 //
+// allowedHosts follows the same "keep unless given" rule as the other
+// preserved fields: nil means keep the secret's current AllowedHosts
+// unchanged; a non-nil slice (even an empty one, to clear every host)
+// replaces it, after ValidateAllowedHost passes on every entry.
+//
 // It refuses a name that does not exist yet: rotate replaces a
 // secret's value, it does not create one (use AddSecret for that).
 //
@@ -490,7 +575,7 @@ func writeSecretMeta(v *Vault, name, content string) error {
 //
 // INVARIANT 10: newValue never appears anywhere on disk except as
 // ciphertext inside value.age, and never in an error message.
-func RotateSecret(v *Vault, name string, newValue []byte) error {
+func RotateSecret(v *Vault, name string, allowedHosts []string, newValue []byte) error {
 	defer func() {
 		for i := range newValue {
 			newValue[i] = 0
@@ -507,6 +592,13 @@ func RotateSecret(v *Vault, name string, newValue []byte) error {
 	if err != nil {
 		return err
 	}
+	hosts := meta.AllowedHosts
+	if allowedHosts != nil {
+		if err := validateAllowedHosts(allowedHosts); err != nil {
+			return err
+		}
+		hosts = allowedHosts
+	}
 	recipients, err := secretRecipients(v)
 	if err != nil {
 		return err
@@ -515,6 +607,6 @@ func RotateSecret(v *Vault, name string, newValue []byte) error {
 		return err
 	}
 	at := time.Now().UTC().Format(time.RFC3339)
-	rendered := renderSecretMeta(meta.Name, meta.Service, meta.Hook, meta.RotateAfter, meta.By, at)
+	rendered := renderSecretMeta(meta.Name, meta.Service, meta.Hook, meta.RotateAfter, meta.By, at, hosts)
 	return writeSecretMeta(v, name, rendered)
 }

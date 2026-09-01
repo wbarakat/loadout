@@ -693,3 +693,107 @@ func TestSecretAccessLogGitignoredSnapshotTracksNothing(t *testing.T) {
 		t.Fatalf("access.log must never be tracked, got %q", out)
 	}
 }
+
+// TestSecretAddAllowedHostsFlagStoredAndListed proves --allowed-hosts
+// splits on comma, trims spaces, and shows up in "secret list --json".
+func TestSecretAddAllowedHostsFlagStoredAndListed(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	_, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "test-key", "--service", "svc", "--allowed-hosts", "api.example.com, other.example.com:8443")
+	if code != 0 {
+		t.Fatalf("secret add --allowed-hosts failed: %s", errOut)
+	}
+
+	out, errOut, code := run(t, "secret", "list", "--json")
+	if code != 0 {
+		t.Fatalf("secret list --json failed: %s", errOut)
+	}
+	var got struct {
+		Secrets []struct {
+			Name         string   `json:"name"`
+			AllowedHosts []string `json:"allowed_hosts"`
+		} `json:"secrets"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(got.Secrets) != 1 {
+		t.Fatalf("want 1 secret, got %+v", got)
+	}
+	want := []string{"api.example.com", "other.example.com:8443"}
+	if len(got.Secrets[0].AllowedHosts) != len(want) || got.Secrets[0].AllowedHosts[0] != want[0] || got.Secrets[0].AllowedHosts[1] != want[1] {
+		t.Fatalf("allowed_hosts = %v, want %v", got.Secrets[0].AllowedHosts, want)
+	}
+}
+
+// TestSecretAddInvalidAllowedHostRefused proves a malformed
+// --allowed-hosts entry (a scheme, here) is a usage error, and
+// creates nothing.
+func TestSecretAddInvalidAllowedHostRefused(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	_, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "test-key", "--service", "svc", "--allowed-hosts", "https://api.example.com")
+	if code != 2 {
+		t.Fatalf("want exit 2, got %d (%s)", code, errOut)
+	}
+	if !strings.Contains(errOut, "not a valid allowed host") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(base, "vault", "secrets", "test-key")); !os.IsNotExist(err) {
+		t.Fatal("a refused add must never create a secret")
+	}
+}
+
+// TestSecretRotateWithoutAllowedHostsFlagPreserves proves rotating
+// without --allowed-hosts keeps the secret's existing allowed_hosts
+// unchanged, the same as service/hook/rotate_after.
+func TestSecretRotateWithoutAllowedHostsFlagPreserves(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	runWithStdin(t, dummySecretValue, "secret", "add", "test-key", "--service", "svc", "--allowed-hosts", "api.example.com")
+	runWithStdin(t, "rotated-value", "secret", "rotate", "test-key")
+
+	out, errOut, code := run(t, "secret", "list", "--json")
+	if code != 0 {
+		t.Fatalf("secret list --json failed: %s", errOut)
+	}
+	var got struct {
+		Secrets []struct {
+			AllowedHosts []string `json:"allowed_hosts"`
+		} `json:"secrets"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(got.Secrets) != 1 || len(got.Secrets[0].AllowedHosts) != 1 || got.Secrets[0].AllowedHosts[0] != "api.example.com" {
+		t.Fatalf("allowed_hosts after rotate without the flag must be preserved, got %+v", got.Secrets)
+	}
+}
+
+// TestSecretRotateWithAllowedHostsFlagReplaces proves rotating WITH
+// --allowed-hosts replaces the secret's allowed_hosts.
+func TestSecretRotateWithAllowedHostsFlagReplaces(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	runWithStdin(t, dummySecretValue, "secret", "add", "test-key", "--service", "svc", "--allowed-hosts", "old.example.com")
+	_, errOut, code := runWithStdin(t, "rotated-value", "secret", "rotate", "test-key", "--allowed-hosts", "new.example.com")
+	if code != 0 {
+		t.Fatalf("secret rotate --allowed-hosts failed: %s", errOut)
+	}
+
+	out, errOut, code := run(t, "secret", "list", "--json")
+	if code != 0 {
+		t.Fatalf("secret list --json failed: %s", errOut)
+	}
+	var got struct {
+		Secrets []struct {
+			AllowedHosts []string `json:"allowed_hosts"`
+		} `json:"secrets"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(got.Secrets) != 1 || len(got.Secrets[0].AllowedHosts) != 1 || got.Secrets[0].AllowedHosts[0] != "new.example.com" {
+		t.Fatalf("allowed_hosts after rotate --allowed-hosts must be replaced, got %+v", got.Secrets)
+	}
+}

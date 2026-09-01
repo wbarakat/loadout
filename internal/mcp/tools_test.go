@@ -41,7 +41,7 @@ func fixtureVault(t *testing.T) *vault.Vault {
 	}
 
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "720h", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "720h", "human", nil, value); err != nil {
 		t.Fatalf("vault.AddSecret: %v", err)
 	}
 	return v

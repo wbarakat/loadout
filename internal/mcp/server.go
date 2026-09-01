@@ -1,7 +1,7 @@
 // Package mcp implements a Model Context Protocol server for
 // loadout. It speaks JSON-RPC 2.0 over stdio, so an agent tool can
-// query the vault and, in a later task, use secrets through a
-// broker.
+// query the vault and use secrets through a broker (http_request)
+// without ever seeing a secret's value.
 //
 // The wire format is newline-delimited JSON: one JSON-RPC message per
 // line, both ways. MCP also allows Content-Length framing (as used by
@@ -93,8 +93,8 @@ type Tool struct {
 }
 
 // Registry holds the tools one MCP server exposes. registerTools
-// registers the vault's read tools (Task 2) and, in Task 3, the
-// secret broker.
+// registers the vault's read tools (Task 2) and the secret broker
+// (Task 3).
 type Registry struct {
 	tools []Tool
 }
@@ -120,12 +120,13 @@ func (r *Registry) find(name string) (Tool, bool) {
 	return Tool{}, false
 }
 
-// registerTools adds every tool this server exposes to reg: the
-// five read tools (context, recall, show, list, list_secrets) from
-// registerReadTools, and, in Task 3, the secret broker — using v to
-// reach the vault's data.
+// registerTools adds every tool this server exposes to reg: the five
+// read tools (context, recall, show, list, list_secrets) from
+// registerReadTools, and the secret broker (http_request) — using v
+// to reach the vault's data.
 func registerTools(reg *Registry, v *vault.Vault) {
 	registerReadTools(reg, v)
+	reg.Register(httpRequestTool(v))
 }
 
 // Serve runs the MCP JSON-RPC loop: it reads newline-delimited JSON

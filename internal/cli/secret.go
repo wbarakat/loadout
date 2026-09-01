@@ -11,11 +11,41 @@ import (
 	"loadout.dev/loadout/internal/vault"
 )
 
-const secretUsage = `usage: loadout secret add <name> --service <svc> [--hook <text>] [--rotate-after <dur>] [--by <who>]
+const secretUsage = `usage: loadout secret add <name> --service <svc> [--hook <text>] [--rotate-after <dur>] [--by <who>] [--allowed-hosts <h1,h2>]
        loadout secret list [--json]
        loadout secret show <name> [--reveal] [--by <who>]
-       loadout secret rotate <name> [--by <who>]
+       loadout secret rotate <name> [--by <who>] [--allowed-hosts <h1,h2>]
        loadout secret rm <name>`
+
+// splitAllowedHosts splits a --allowed-hosts flag value into a slice:
+// comma-separated, each entry trimmed of spaces, empty entries
+// dropped. Unlike vault's own frontmatter parser, this always returns
+// a non-nil slice — even an empty one for an empty raw value — so a
+// caller can tell "the flag was given" (non-nil) apart from "the flag
+// was never passed" (nil), the sentinel cmdSecretRotate relies on to
+// decide whether to keep a secret's existing allowed_hosts unchanged.
+func splitAllowedHosts(raw string) []string {
+	hosts := []string{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			hosts = append(hosts, part)
+		}
+	}
+	return hosts
+}
+
+// validateAllowedHostsFlag validates every host in hosts (already
+// split from a --allowed-hosts flag) with vault.ValidateAllowedHost,
+// returning the first error found.
+func validateAllowedHostsFlag(hosts []string) error {
+	for _, h := range hosts {
+		if err := vault.ValidateAllowedHost(h); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // stdinIsTTY reports whether os.Stdin is a terminal rather than a
 // pipe or a redirected file. cmdSecretAdd refuses to run when this is
@@ -65,14 +95,18 @@ func cmdSecret(out, errOut io.Writer, args []string, m mode) int {
 }
 
 // secretAddArgs is the parsed shape of "secret add <name> --service
-// <svc> [--hook <text>] [--rotate-after <dur>] [--by <who>]".
+// <svc> [--hook <text>] [--rotate-after <dur>] [--by <who>]
+// [--allowed-hosts <h1,h2>]".
 type secretAddArgs struct {
 	name, service, hook, rotateAfter, by string
+	allowedHosts                         []string
 }
 
 // parseSecretAddArgs reads secretAddArgs out of args. by defaults to
-// "human" when --by is absent, matching "add memory --by". ok is
-// false when args does not match the expected shape, or --service is
+// "human" when --by is absent, matching "add memory --by".
+// allowedHosts defaults to empty (no host permitted, the fail-closed
+// default for the broker) when --allowed-hosts is absent. ok is false
+// when args does not match the expected shape, or --service is
 // missing, so the caller can print usage.
 func parseSecretAddArgs(args []string) (secretAddArgs, bool) {
 	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
@@ -96,6 +130,8 @@ func parseSecretAddArgs(args []string) (secretAddArgs, bool) {
 			a.rotateAfter = value
 		case "--by":
 			a.by = value
+		case "--allowed-hosts":
+			a.allowedHosts = splitAllowedHosts(value)
 		default:
 			return secretAddArgs{}, false
 		}
@@ -152,6 +188,10 @@ func cmdSecretAdd(out, errOut io.Writer, args []string, m mode) int {
 			return 2
 		}
 	}
+	if err := validateAllowedHostsFlag(parsed.allowedHosts); err != nil {
+		fmt.Fprintln(errOut, err)
+		return 2
+	}
 	if stdinIsTTY() {
 		io.WriteString(errOut, pipeStdinMessage+"\n")
 		return 1
@@ -183,7 +223,7 @@ func cmdSecretAdd(out, errOut io.Writer, args []string, m mode) int {
 		return 1
 	}
 	defer release()
-	if err := vault.AddSecret(v, parsed.name, parsed.service, parsed.hook, parsed.rotateAfter, by, value); err != nil {
+	if err := vault.AddSecret(v, parsed.name, parsed.service, parsed.hook, parsed.rotateAfter, by, parsed.allowedHosts, value); err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
@@ -210,12 +250,13 @@ type secretAddResult struct {
 // list": metadata only, exactly what Secret carries — never a value
 // field, since a Secret never holds one (INVARIANT 10).
 type secretListItem struct {
-	Name        string `json:"name"`
-	Service     string `json:"service"`
-	Hook        string `json:"hook"`
-	RotateAfter string `json:"rotate_after"`
-	By          string `json:"by"`
-	At          string `json:"at"`
+	Name         string   `json:"name"`
+	Service      string   `json:"service"`
+	Hook         string   `json:"hook"`
+	RotateAfter  string   `json:"rotate_after"`
+	By           string   `json:"by"`
+	At           string   `json:"at"`
+	AllowedHosts []string `json:"allowed_hosts"`
 }
 
 // secretListResult is the JSON shape of "loadout secret list".
@@ -241,12 +282,13 @@ func cmdSecretList(out, errOut io.Writer, m mode) int {
 		items := make([]secretListItem, 0, len(secrets))
 		for _, s := range secrets {
 			items = append(items, secretListItem{
-				Name:        s.Name,
-				Service:     s.Service,
-				Hook:        s.Hook,
-				RotateAfter: s.RotateAfter,
-				By:          s.By,
-				At:          s.At,
+				Name:         s.Name,
+				Service:      s.Service,
+				Hook:         s.Hook,
+				RotateAfter:  s.RotateAfter,
+				By:           s.By,
+				At:           s.At,
+				AllowedHosts: s.AllowedHosts,
 			})
 		}
 		printJSON(out, secretListResult{Secrets: items})
@@ -350,15 +392,20 @@ func cmdSecretShow(out, errOut io.Writer, args []string, m mode) int {
 }
 
 // secretRotateArgs is the parsed shape of "secret rotate <name>
-// [--by <who>]".
+// [--by <who>] [--allowed-hosts <h1,h2>]".
 type secretRotateArgs struct {
-	name string
-	by   string
+	name         string
+	by           string
+	allowedHosts []string
 }
 
 // parseSecretRotateArgs reads secretRotateArgs out of args. by
 // defaults to "human" when --by is absent, matching "secret show".
-// ok is false when args does not match the expected shape.
+// allowedHosts stays nil when --allowed-hosts is absent — the
+// sentinel cmdSecretRotate reads as "keep the secret's current
+// allowed_hosts unchanged", the same way service/hook/rotate_after
+// are always preserved on rotate. ok is false when args does not
+// match the expected shape.
 func parseSecretRotateArgs(args []string) (secretRotateArgs, bool) {
 	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
 		return secretRotateArgs{}, false
@@ -366,16 +413,18 @@ func parseSecretRotateArgs(args []string) (secretRotateArgs, bool) {
 	a := secretRotateArgs{name: args[0], by: "human"}
 	rest := args[1:]
 	for i := 0; i < len(rest); i++ {
+		if i+1 >= len(rest) {
+			return secretRotateArgs{}, false
+		}
 		switch rest[i] {
 		case "--by":
-			if i+1 >= len(rest) {
-				return secretRotateArgs{}, false
-			}
 			a.by = rest[i+1]
-			i++
+		case "--allowed-hosts":
+			a.allowedHosts = splitAllowedHosts(rest[i+1])
 		default:
 			return secretRotateArgs{}, false
 		}
+		i++
 	}
 	return a, true
 }
@@ -400,6 +449,10 @@ func cmdSecretRotate(out, errOut io.Writer, args []string, m mode) int {
 	}
 	by, err := validateBy(parsed.by)
 	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 2
+	}
+	if err := validateAllowedHostsFlag(parsed.allowedHosts); err != nil {
 		fmt.Fprintln(errOut, err)
 		return 2
 	}
@@ -434,7 +487,7 @@ func cmdSecretRotate(out, errOut io.Writer, args []string, m mode) int {
 		return 1
 	}
 	defer release()
-	if err := vault.RotateSecret(v, parsed.name, value); err != nil {
+	if err := vault.RotateSecret(v, parsed.name, parsed.allowedHosts, value); err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}

@@ -121,8 +121,9 @@ func TestServeInitialize(t *testing.T) {
 }
 
 // TestServeToolsListAdvertisesReadTools proves tools/list reports the
-// five read tools Task 2 registers, each with a non-empty
-// description and a type:object InputSchema.
+// five read tools Task 2 registers plus Task 3's secret broker
+// (http_request), each with a non-empty description and a
+// type:object InputSchema.
 func TestServeToolsListAdvertisesReadTools(t *testing.T) {
 	v := testVault(t)
 	msgs, err := serve(t, v, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
@@ -142,7 +143,7 @@ func TestServeToolsListAdvertisesReadTools(t *testing.T) {
 	if err := json.Unmarshal(msgs[0].Result, &result); err != nil {
 		t.Fatalf("tools/list result did not parse: %v", err)
 	}
-	want := []string{"context", "recall", "show", "list", "list_secrets"}
+	want := []string{"context", "recall", "show", "list", "list_secrets", "http_request"}
 	if len(result.Tools) != len(want) {
 		t.Fatalf("want %d tools, got %d: %+v", len(want), len(result.Tools), result.Tools)
 	}

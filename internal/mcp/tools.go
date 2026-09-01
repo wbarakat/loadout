@@ -164,22 +164,24 @@ func listTool(v *vault.Vault) Tool {
 // secretMetadata is one secret's entry in the "list_secrets" tool's
 // JSON result. It carries exactly the fields INVARIANT 10 allows a
 // caller to see: never a value, and never whether the secret can be
-// decrypted. AllowedHosts is not yet in vault.Secret; Task 3 adds it
-// and this shape then adds the field too.
+// decrypted. AllowedHosts tells an agent which host it may reach
+// through the http_request broker without needing to guess or probe.
 type secretMetadata struct {
-	Name        string `json:"name"`
-	Service     string `json:"service"`
-	Hook        string `json:"hook"`
-	RotateAfter string `json:"rotate_after"`
+	Name         string   `json:"name"`
+	Service      string   `json:"service"`
+	Hook         string   `json:"hook"`
+	RotateAfter  string   `json:"rotate_after"`
+	AllowedHosts []string `json:"allowed_hosts"`
 }
 
 // listSecretsTool lists every secret's metadata: name, service, hook,
-// and rotation reminder. It never decrypts a value, and a Secret
-// never carries one to leak in the first place (INVARIANT 10).
+// rotation reminder, and allowed hosts. It never decrypts a value,
+// and a Secret never carries one to leak in the first place
+// (INVARIANT 10).
 func listSecretsTool(v *vault.Vault) Tool {
 	return Tool{
 		Name:        "list_secrets",
-		Description: "List every secret's metadata: name, service, hook, and rotation reminder. Never a value; never a decrypt.",
+		Description: "List every secret's metadata: name, service, hook, rotation reminder, and allowed hosts. Never a value; never a decrypt.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 		Handler: func(_ json.RawMessage) (ToolResult, error) {
 			secrets, err := vault.ListSecrets(v)
@@ -189,10 +191,11 @@ func listSecretsTool(v *vault.Vault) Tool {
 			items := make([]secretMetadata, 0, len(secrets))
 			for _, s := range secrets {
 				items = append(items, secretMetadata{
-					Name:        s.Name,
-					Service:     s.Service,
-					Hook:        s.Hook,
-					RotateAfter: s.RotateAfter,
+					Name:         s.Name,
+					Service:      s.Service,
+					Hook:         s.Hook,
+					RotateAfter:  s.RotateAfter,
+					AllowedHosts: s.AllowedHosts,
 				})
 			}
 			data, err := json.Marshal(items)
