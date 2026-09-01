@@ -10,7 +10,7 @@ import (
 
 func TestParseArgsRequiresData(t *testing.T) {
 	var stderr bytes.Buffer
-	_, _, ok := parseArgs([]string{"-addr", ":9999"}, &stderr)
+	_, _, _, ok := parseArgs([]string{"-addr", ":9999"}, &stderr)
 	if ok {
 		t.Fatal("expected parseArgs to refuse when -data is missing")
 	}
@@ -21,7 +21,7 @@ func TestParseArgsRequiresData(t *testing.T) {
 
 func TestParseArgsDefaultsAddr(t *testing.T) {
 	var stderr bytes.Buffer
-	dataDir, addr, ok := parseArgs([]string{"-data", "/tmp/whatever"}, &stderr)
+	dataDir, addr, corsOrigin, ok := parseArgs([]string{"-data", "/tmp/whatever"}, &stderr)
 	if !ok {
 		t.Fatalf("expected parseArgs to accept -data alone, stderr: %s", stderr.String())
 	}
@@ -30,6 +30,51 @@ func TestParseArgsDefaultsAddr(t *testing.T) {
 	}
 	if addr != ":7777" {
 		t.Fatalf("expected default addr :7777, got %q", addr)
+	}
+	if corsOrigin != "" {
+		t.Fatalf("expected CORS off by default, got origin %q", corsOrigin)
+	}
+}
+
+// TestParseArgsCORSOriginFromFlag proves -cors-origin is read and
+// returned, so main can pass it on to the server.
+func TestParseArgsCORSOriginFromFlag(t *testing.T) {
+	var stderr bytes.Buffer
+	_, _, corsOrigin, ok := parseArgs([]string{"-data", "/tmp/whatever", "-cors-origin", "https://loadout.example.com"}, &stderr)
+	if !ok {
+		t.Fatalf("expected parseArgs to accept -cors-origin, stderr: %s", stderr.String())
+	}
+	if corsOrigin != "https://loadout.example.com" {
+		t.Fatalf("expected the flag's origin, got %q", corsOrigin)
+	}
+}
+
+// TestParseArgsCORSOriginFromEnv proves the LOADOUT_CORS_ORIGIN
+// fallback: when -cors-origin is not passed, parseArgs reads the
+// environment variable instead.
+func TestParseArgsCORSOriginFromEnv(t *testing.T) {
+	t.Setenv("LOADOUT_CORS_ORIGIN", "https://from-env.example.com")
+	var stderr bytes.Buffer
+	_, _, corsOrigin, ok := parseArgs([]string{"-data", "/tmp/whatever"}, &stderr)
+	if !ok {
+		t.Fatalf("expected parseArgs to accept -data alone, stderr: %s", stderr.String())
+	}
+	if corsOrigin != "https://from-env.example.com" {
+		t.Fatalf("expected the env var's origin, got %q", corsOrigin)
+	}
+}
+
+// TestParseArgsCORSOriginFlagWinsOverEnv proves the flag takes
+// priority when both the flag and the environment variable are set.
+func TestParseArgsCORSOriginFlagWinsOverEnv(t *testing.T) {
+	t.Setenv("LOADOUT_CORS_ORIGIN", "https://from-env.example.com")
+	var stderr bytes.Buffer
+	_, _, corsOrigin, ok := parseArgs([]string{"-data", "/tmp/whatever", "-cors-origin", "https://from-flag.example.com"}, &stderr)
+	if !ok {
+		t.Fatalf("expected parseArgs to accept both, stderr: %s", stderr.String())
+	}
+	if corsOrigin != "https://from-flag.example.com" {
+		t.Fatalf("expected the flag to win over the env var, got %q", corsOrigin)
 	}
 }
 

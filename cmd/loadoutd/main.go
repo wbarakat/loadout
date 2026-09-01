@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	dataDir, addr, ok := parseArgs(os.Args[1:], os.Stderr)
+	dataDir, addr, corsOrigin, ok := parseArgs(os.Args[1:], os.Stderr)
 	if !ok {
 		os.Exit(2)
 	}
@@ -23,28 +23,37 @@ func main() {
 		fmt.Fprintf(os.Stderr, "loadoutd: %v\n", err)
 		os.Exit(1)
 	}
+	srv.SetCORSOrigin(corsOrigin)
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
 		fmt.Fprintf(os.Stderr, "loadoutd: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// parseArgs parses loadoutd's flags: -data (required) and -addr
-// (default :7777). ok is false when the flags cannot start the
-// server; parseArgs has already printed the reason to stderr.
-func parseArgs(args []string, stderr io.Writer) (dataDir, addr string, ok bool) {
+// parseArgs parses loadoutd's flags: -data (required), -addr
+// (default :7777), and -cors-origin (default "", CORS off). When
+// -cors-origin is not passed, parseArgs falls back to the
+// LOADOUT_CORS_ORIGIN environment variable; the flag wins when both
+// are set. ok is false when the flags cannot start the server;
+// parseArgs has already printed the reason to stderr.
+func parseArgs(args []string, stderr io.Writer) (dataDir, addr, corsOrigin string, ok bool) {
 	fs := flag.NewFlagSet("loadoutd", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	d := fs.String("data", "", "the server's data directory (required)")
 	a := fs.String("addr", ":7777", "the address loadoutd listens on")
+	c := fs.String("cors-origin", "", "the browser origin allowed to call this server's API over CORS (default: off)")
 	if err := fs.Parse(args); err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	if *d == "" {
 		fmt.Fprintln(stderr, "loadoutd: -data is required. Fix: pass -data <dir>.")
-		return "", "", false
+		return "", "", "", false
 	}
-	return *d, *a, true
+	origin := *c
+	if origin == "" {
+		origin = os.Getenv("LOADOUT_CORS_ORIGIN")
+	}
+	return *d, *a, origin, true
 }
 
 // newServer opens the store at dataDir and builds the Server that

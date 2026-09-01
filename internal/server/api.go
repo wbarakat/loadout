@@ -16,9 +16,10 @@ import (
 // handles is opaque bytes: this file never decodes, decrypts, or
 // otherwise reads inside a blob (invariant 8).
 type Server struct {
-	store  *Store
-	token  string
-	logger *log.Logger
+	store      *Store
+	token      string
+	logger     *log.Logger
+	corsOrigin string
 }
 
 // New builds a Server backed by store, requiring token on every
@@ -39,7 +40,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/snapshots", s.auth(s.handlePostSnapshot))
 	mux.Handle("GET /v1/snapshots/latest", s.auth(s.handleLatest))
 	mux.Handle("GET /v1/snapshots/{version}", s.auth(s.handleGetSnapshot))
-	return mux
+	return corsMiddleware(mux, s.corsOrigin)
+}
+
+// SetCORSOrigin sets the single browser origin allowed to call this
+// server's API over CORS. An empty origin (the zero value, and
+// New's default) keeps CORS off: a self-hosted server never answers
+// cross-origin browser requests unless its operator opts in.
+func (s *Server) SetCORSOrigin(origin string) {
+	s.corsOrigin = origin
 }
 
 // auth requires a valid "Authorization: Bearer <token>" header,
