@@ -44,6 +44,7 @@ commands:
   run --secret NAME[=ENVVAR] [--secret NAME2...] [--by WHO] -- CMD [args...]
                              decrypt secrets, inject them into a child process's
                              environment, exec it, and exit with its exit code
+  mcp                        serve the vault over MCP as JSON-RPC on stdio
   help                       show this message
 
 flags:
@@ -139,6 +140,8 @@ func Run(out, errOut io.Writer, args []string) int {
 		return cmdSecret(out, errOut, args[1:], m)
 	case "run":
 		return cmdRun(out, errOut, args[1:], m)
+	case "mcp":
+		return cmdMCP(errOut, args[1:])
 	default:
 		fmt.Fprintf(errOut, "unknown command %q\n%s", args[0], usage)
 		return 2
