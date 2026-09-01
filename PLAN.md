@@ -42,7 +42,7 @@ The kinds:
 
 - **Skill** (`skill/*`): a folder with a `SKILL.md` file plus resources. Matches the open agent-skills format.
 - **Memory** (`memory/*`): one markdown fact with frontmatter.
-- **Secret** (`secret/*`, Phase 5): plaintext metadata (name, hook, service), encrypted body. The plain value never enters the vault files.
+- **Secret** (`secret/*`, Phase 5): a plaintext metadata file (name, service, hook, optional `rotate_after`; never the value) plus a sibling `.age` file holding the value, encrypted to every enrolled device recipient. Agents use a secret without reading it: `loadout run -- <cmd>` injects chosen secrets as environment variables into a child process, and the value never touches disk or agent context. `loadout secret show` reveals a value on stdout only under an explicit flag. Every decrypt appends to a local access log (device, tool, time, secret name — never the value). Approving a device re-encrypts the secret files to the newcomer.
 
 Around the items:
 
@@ -119,6 +119,7 @@ The system's axioms. An agent can deduce correct behavior from these alone:
 7. Every error names its repair.
 8. The server (Phase 4+) never holds a plaintext byte of user content.
 9. Every agent-written item carries provenance and starts as a draft.
+10. A secret value (Phase 5+) lives only as ciphertext at rest, in a child process environment, or on stdout under an explicit reveal. It never enters a plaintext vault file, git history, a projection, an agent-context file, a log line, an error message, a command argument, or `--json` output.
 
 ## 9. Approach (decided)
 
