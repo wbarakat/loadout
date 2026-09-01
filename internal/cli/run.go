@@ -38,6 +38,8 @@ commands:
   secret list [--json]       show every secret's metadata, never its value
   secret show NAME [--reveal] [--by WHO]
                              refuse by default; print the value only with --reveal
+  secret rotate NAME [--by WHO]
+                             replace a secret's value; the new value is piped on stdin
   secret rm NAME             remove a secret
   run --secret NAME[=ENVVAR] [--secret NAME2...] [--by WHO] -- CMD [args...]
                              decrypt secrets, inject them into a child process's

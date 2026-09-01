@@ -14,6 +14,7 @@ import (
 const secretUsage = `usage: loadout secret add <name> --service <svc> [--hook <text>] [--rotate-after <dur>] [--by <who>]
        loadout secret list [--json]
        loadout secret show <name> [--reveal] [--by <who>]
+       loadout secret rotate <name> [--by <who>]
        loadout secret rm <name>`
 
 // stdinIsTTY reports whether os.Stdin is a terminal rather than a
@@ -45,6 +46,8 @@ func cmdSecret(out, errOut io.Writer, args []string, m mode) int {
 		return cmdSecretList(out, errOut, m)
 	case "show":
 		return cmdSecretShow(out, errOut, args[1:], m)
+	case "rotate":
+		return cmdSecretRotate(out, errOut, args[1:], m)
 	case "rm":
 		return cmdSecretRemove(out, errOut, args[1:], m)
 	default:
@@ -326,6 +329,107 @@ func cmdSecretShow(out, errOut io.Writer, args []string, m mode) int {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+	return 0
+}
+
+// secretRotateArgs is the parsed shape of "secret rotate <name>
+// [--by <who>]".
+type secretRotateArgs struct {
+	name string
+	by   string
+}
+
+// parseSecretRotateArgs reads secretRotateArgs out of args. by
+// defaults to "human" when --by is absent, matching "secret show".
+// ok is false when args does not match the expected shape.
+func parseSecretRotateArgs(args []string) (secretRotateArgs, bool) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
+		return secretRotateArgs{}, false
+	}
+	a := secretRotateArgs{name: args[0], by: "human"}
+	rest := args[1:]
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case "--by":
+			if i+1 >= len(rest) {
+				return secretRotateArgs{}, false
+			}
+			a.by = rest[i+1]
+			i++
+		default:
+			return secretRotateArgs{}, false
+		}
+	}
+	return a, true
+}
+
+// secretRotateResult is the JSON shape of "loadout secret rotate" —
+// the name only, never a value field.
+type secretRotateResult struct {
+	Name    string `json:"name"`
+	Rotated bool   `json:"rotated"`
+}
+
+// cmdSecretRotate reads a NEW value from piped stdin and replaces an
+// existing secret's value, keeping its service, hook, and
+// rotate_after fields exactly as they were and stamping a fresh at.
+// It never accepts the value as a flag or argument, and never echoes
+// it back — the same pipe-only rule as cmdSecretAdd.
+func cmdSecretRotate(out, errOut io.Writer, args []string, m mode) int {
+	parsed, ok := parseSecretRotateArgs(args)
+	if !ok {
+		fmt.Fprintln(errOut, secretUsage)
+		return 2
+	}
+	by, err := validateBy(parsed.by)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 2
+	}
+	if stdinIsTTY() {
+		io.WriteString(errOut, pipeStdinMessage+"\n")
+		return 1
+	}
+	value, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	value = trimTrailingNewline(value)
+
+	v, err := vault.Open(vault.DefaultRoot())
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	release, err := vault.Lock(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	defer release()
+	if err := vault.RotateSecret(v, parsed.name, value); err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	if err := vault.Snapshot(v, "rotate secret "+parsed.name); err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	if err := AppendAccessLog(v, AccessEntry{
+		At:     time.Now().UTC().Format(time.RFC3339),
+		Verb:   "rotate",
+		Secret: parsed.name,
+		Tool:   by,
+	}); err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	if m == modeJSON {
+		printJSON(out, secretRotateResult{Name: parsed.name, Rotated: true})
+		return 0
+	}
+	fmt.Fprintf(out, "rotated secret/%s\n", parsed.name)
 	return 0
 }
 

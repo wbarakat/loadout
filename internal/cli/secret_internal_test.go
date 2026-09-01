@@ -110,3 +110,78 @@ func TestSecretAddRefusesTTYStdin(t *testing.T) {
 		t.Fatal("a TTY refusal must never create a secret")
 	}
 }
+
+func TestParseSecretRotateArgsDefaults(t *testing.T) {
+	a, ok := parseSecretRotateArgs([]string{"my-key"})
+	if !ok || a.by != "human" || a.name != "my-key" {
+		t.Fatalf("bad defaults: %+v (ok=%v)", a, ok)
+	}
+}
+
+func TestParseSecretRotateArgsFullShape(t *testing.T) {
+	a, ok := parseSecretRotateArgs([]string{"my-key", "--by", "pi"})
+	if !ok || a.by != "pi" || a.name != "my-key" {
+		t.Fatalf("bad parse: %+v (ok=%v)", a, ok)
+	}
+}
+
+func TestParseSecretRotateArgsRejectsBadShape(t *testing.T) {
+	if _, ok := parseSecretRotateArgs(nil); ok {
+		t.Fatal("must require a name")
+	}
+	if _, ok := parseSecretRotateArgs([]string{"my-key", "--by"}); ok {
+		t.Fatal("a --by flag with no value must be rejected")
+	}
+	if _, ok := parseSecretRotateArgs([]string{"my-key", "--bogus", "x"}); ok {
+		t.Fatal("an unknown flag must be rejected")
+	}
+}
+
+// TestSecretRotateRefusesTTYStdin proves cmdSecretRotate refuses to
+// run when stdin is a terminal, the same pipe-only rule as
+// cmdSecretAdd, and never touches the vault at all — the refusal must
+// fail before any I/O that could look like progress, including
+// reading the secret's own metadata to check it exists.
+func TestSecretRotateRefusesTTYStdin(t *testing.T) {
+	orig := stdinIsTTY
+	stdinIsTTY = func() bool { return true }
+	defer func() { stdinIsTTY = orig }()
+
+	base := t.TempDir()
+	t.Setenv("HOME", filepath.Join(base, "home"))
+	t.Setenv("LOADOUT_HOME", filepath.Join(base, "vault"))
+	if err := os.MkdirAll(filepath.Join(base, "home"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v, err := vault.Init(filepath.Join(base, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddSecret(v, "my-key", "svc", "", "", "human", []byte("original-value")); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(v.SecretsDir(), "my-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := cmdSecretRotate(&out, &errOut, []string{"my-key"}, modeText)
+	if code != 1 {
+		t.Fatalf("want exit 1, got %d (%s)", code, errOut.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("must print nothing to stdout, got %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), "pipe the value on stdin") {
+		t.Fatalf("bad error: %q", errOut.String())
+	}
+
+	after, err := os.ReadFile(filepath.Join(v.SecretsDir(), "my-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a TTY refusal must never touch the existing secret's value")
+	}
+}

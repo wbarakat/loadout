@@ -403,6 +403,161 @@ func TestSecretRmMissingRefused(t *testing.T) {
 	}
 }
 
+// TestSecretRotateReplacesValueAndUpdatesAt proves the headline
+// mechanism: rotate replaces a secret's value (round-tripping through
+// show --reveal), keeps the metadata the secret was added with, and
+// prints only a fixed confirmation line, never the value.
+func TestSecretRotateReplacesValueAndUpdatesAt(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	runWithStdin(t, dummySecretValue, "secret", "add", "test-key", "--service", "svc", "--hook", "a hook", "--rotate-after", "24h")
+
+	const newValue = "rotated-secret-value-999"
+	out, errOut, code := runWithStdin(t, newValue, "secret", "rotate", "test-key")
+	if code != 0 {
+		t.Fatalf("secret rotate failed: %s", errOut)
+	}
+	if out != "rotated secret/test-key\n" {
+		t.Fatalf("bad output: %q", out)
+	}
+	if strings.Contains(out, newValue) || strings.Contains(errOut, newValue) {
+		t.Fatal("secret rotate must never echo the value")
+	}
+
+	showOut, showErr, showCode := run(t, "secret", "show", "test-key", "--reveal")
+	if showCode != 0 {
+		t.Fatalf("secret show --reveal failed: %s", showErr)
+	}
+	if showOut != newValue {
+		t.Fatalf("stdout = %q, want the rotated value %q", showOut, newValue)
+	}
+
+	metaData, err := os.ReadFile(filepath.Join(base, "vault", "secrets", "test-key", "meta.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := string(metaData)
+	for _, want := range []string{"service: svc", "hook: a hook", "rotate_after: 24h"} {
+		if !strings.Contains(meta, want) {
+			t.Fatalf("rotate must keep %q, got:\n%s", want, meta)
+		}
+	}
+	if bytes.Contains(metaData, []byte(newValue)) {
+		t.Fatalf("meta.md must never contain the value, got:\n%s", metaData)
+	}
+
+	valueData, err := os.ReadFile(filepath.Join(base, "vault", "secrets", "test-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(valueData, []byte(newValue)) || bytes.Contains(valueData, []byte(dummySecretValue)) {
+		t.Fatal("value.age must hold ciphertext only, never a plaintext value")
+	}
+}
+
+// TestSecretRotateRefusesNonexistentSecret proves rotate replaces a
+// value, it does not create one: a name that was never added is
+// refused with the standard grammar, and the pipe is never even
+// consumed into a new secret.
+func TestSecretRotateRefusesNonexistentSecret(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+
+	out, errOut, code := runWithStdin(t, dummySecretValue, "secret", "rotate", "no-such-key")
+	if code != 1 {
+		t.Fatalf("want exit 1, got %d (%s)", code, errOut)
+	}
+	if out != "" {
+		t.Fatalf("must print nothing to stdout, got %q", out)
+	}
+	if !strings.Contains(errOut, "no such secret") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+	if strings.Contains(errOut, dummySecretValue) {
+		t.Fatalf("the error must never hold a value, got %q", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(base, "vault", "secrets", "no-such-key")); !os.IsNotExist(err) {
+		t.Fatal("rotate must never create a secret")
+	}
+}
+
+// TestSecretRotateAppendsAccessLogEntryNoValue proves rotate appends
+// exactly one access-log entry, verb "rotate", naming the secret but
+// never its value.
+func TestSecretRotateAppendsAccessLogEntryNoValue(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	runWithStdin(t, dummySecretValue, "secret", "add", "test-key", "--service", "svc")
+
+	const newValue = "rotated-secret-value-321"
+	_, errOut, code := runWithStdin(t, newValue, "secret", "rotate", "test-key", "--by", "pi")
+	if code != 0 {
+		t.Fatalf("secret rotate failed: %s", errOut)
+	}
+
+	logData, err := os.ReadFile(filepath.Join(base, "vault", "access.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logData), newValue) || strings.Contains(string(logData), dummySecretValue) {
+		t.Fatalf("the access log must never hold a value, got %q", logData)
+	}
+	lines := strings.Split(strings.TrimRight(string(logData), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("want exactly 1 access-log line, got %d: %q", len(lines), logData)
+	}
+	var entry struct {
+		At     string `json:"at"`
+		Verb   string `json:"verb"`
+		Secret string `json:"secret"`
+		Tool   string `json:"tool"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("access-log line did not parse: %v", err)
+	}
+	if entry.Verb != "rotate" || entry.Secret != "test-key" || entry.Tool != "pi" || entry.At == "" {
+		t.Fatalf("bad access-log entry: %+v", entry)
+	}
+}
+
+// TestSecretRotateJSON proves rotate's JSON shape carries the name
+// only, never a value field.
+func TestSecretRotateJSON(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	runWithStdin(t, dummySecretValue, "secret", "add", "test-key", "--service", "svc")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origStdin := os.Stdin
+	os.Stdin = r
+	go func() {
+		io.WriteString(w, "rotated-secret-value-json")
+		w.Close()
+	}()
+	out, errOut, code := run(t, "secret", "rotate", "test-key", "--json")
+	os.Stdin = origStdin
+	r.Close()
+	if code != 0 {
+		t.Fatalf("secret rotate --json failed: %s", errOut)
+	}
+	if strings.Contains(out, "rotated-secret-value-json") {
+		t.Fatalf("secret rotate --json must never hold the value, got %q", out)
+	}
+	var got struct {
+		Name    string `json:"name"`
+		Rotated bool   `json:"rotated"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if got.Name != "test-key" || !got.Rotated {
+		t.Fatalf("bad json: %+v", got)
+	}
+}
+
 // TestSecretAccessLogGitignoredSnapshotTracksNothing proves the
 // device-local access log a "show --reveal" writes never enters
 // history: a later snapshot-causing command tracks nothing new for

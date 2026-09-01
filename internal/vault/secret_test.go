@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 
@@ -621,6 +622,188 @@ func TestReEncryptSecretsSkipsUndecryptableSecretByNameOnly(t *testing.T) {
 	}
 	if plaintext.String() != dummySecretValue {
 		t.Fatal("the decryptable secret's value must be unchanged")
+	}
+}
+
+// TestSecretDueTrueOncePastDue proves the headline case: a secret
+// whose rotate_after has fully elapsed since at is due.
+func TestSecretDueTrueOncePastDue(t *testing.T) {
+	now := time.Now().UTC()
+	s := vault.Secret{
+		Name:        "openai-key",
+		RotateAfter: "24h",
+		At:          now.Add(-25 * time.Hour).Format(time.RFC3339),
+	}
+	if !vault.SecretDue(s, now) {
+		t.Fatal("a secret added 25h ago with a 24h rotate_after must be due")
+	}
+}
+
+// TestSecretDueFalseWhenNotYetElapsed proves a fresh secret, added
+// well within its own rotate_after window, is not due.
+func TestSecretDueFalseWhenNotYetElapsed(t *testing.T) {
+	now := time.Now().UTC()
+	s := vault.Secret{
+		Name:        "openai-key",
+		RotateAfter: "720h",
+		At:          now.Add(-1 * time.Hour).Format(time.RFC3339),
+	}
+	if vault.SecretDue(s, now) {
+		t.Fatal("a secret added 1h ago with a 720h rotate_after must not be due")
+	}
+}
+
+// TestSecretDueFalseWhenRotateAfterEmpty proves a secret with no
+// rotation reminder set is never due, no matter how old.
+func TestSecretDueFalseWhenRotateAfterEmpty(t *testing.T) {
+	now := time.Now().UTC()
+	s := vault.Secret{
+		Name: "openai-key",
+		At:   now.Add(-24 * 365 * time.Hour).Format(time.RFC3339),
+	}
+	if vault.SecretDue(s, now) {
+		t.Fatal("an empty rotate_after must never be due")
+	}
+}
+
+// TestSecretDueFalseOnUnparseableFields proves SecretDue never errors:
+// an unparseable rotate_after or at both read back as "not due",
+// never a crash or a false positive.
+func TestSecretDueFalseOnUnparseableFields(t *testing.T) {
+	now := time.Now().UTC()
+	cases := []vault.Secret{
+		{Name: "a", RotateAfter: "not-a-duration", At: now.Add(-1000 * time.Hour).Format(time.RFC3339)},
+		{Name: "b", RotateAfter: "24h", At: "not-a-timestamp"},
+		{Name: "c", RotateAfter: "24h", At: ""},
+	}
+	for _, s := range cases {
+		if vault.SecretDue(s, now) {
+			t.Fatalf("a malformed secret %+v must never be reported due", s)
+		}
+	}
+}
+
+// TestRotateSecretReplacesValueKeepsMetaUpdatesAt proves the
+// headline mechanism: RotateSecret re-encrypts a new value, decrypts
+// back to exactly that new value, preserves service/hook/rotate_after/
+// by untouched, and advances at to a fresh timestamp.
+func TestRotateSecretReplacesValueKeepsMetaUpdatesAt(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "24h", "human", []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "meta.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// at has second-level RFC3339 resolution: sleep past a full second
+	// so a real clock advance is guaranteed to show up in the new at,
+	// rather than an assertion that is only sometimes true.
+	time.Sleep(1100 * time.Millisecond)
+
+	const newValue = "rotated-secret-value-456"
+	if err := vault.RotateSecret(v, "openai-key", []byte(newValue)); err != nil {
+		t.Fatal(err)
+	}
+
+	ciphertext, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := deviceIdentityFor(t, v)
+	r, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
+	if err != nil {
+		t.Fatalf("value.age must decrypt after rotation: %v", err)
+	}
+	var plaintext bytes.Buffer
+	if _, err := plaintext.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	if plaintext.String() != newValue {
+		t.Fatalf("decrypted value = %q, want %q", plaintext.String(), newValue)
+	}
+	if bytes.Contains(ciphertext, []byte(newValue)) {
+		t.Fatal("value.age must hold ciphertext only, never the plaintext")
+	}
+
+	after, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "meta.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterText := string(after)
+	for _, want := range []string{"service: openai", "hook: deploy hook", "rotate_after: 24h", "by: human"} {
+		if !strings.Contains(afterText, want) {
+			t.Fatalf("meta.md must keep %q unchanged after rotation, got:\n%s", want, afterText)
+		}
+	}
+	if string(before) == afterText {
+		t.Fatal("meta.md's at field must change after rotation")
+	}
+}
+
+// TestRotateSecretZeroesCallerBuffer proves RotateSecret zeroes the
+// caller's new-value buffer, the same as AddSecret.
+func TestRotateSecretZeroesCallerBuffer(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	newValue := []byte("rotated-value")
+	if err := vault.RotateSecret(v, "openai-key", newValue); err != nil {
+		t.Fatal(err)
+	}
+	for i, b := range newValue {
+		if b != 0 {
+			t.Fatalf("newValue[%d] = %d, want 0: RotateSecret must zero the caller's buffer", i, b)
+		}
+	}
+}
+
+// TestRotateSecretRefusesNonexistent proves rotate replaces a value,
+// it does not create one: a name that was never added is refused.
+func TestRotateSecretRefusesNonexistent(t *testing.T) {
+	v := newVault(t)
+	if err := vault.RotateSecret(v, "no-such-key", []byte("x")); err == nil {
+		t.Fatal("RotateSecret must refuse a name that does not exist")
+	}
+}
+
+// TestRotateSecretEncryptsToCurrentRoster proves a rotated value
+// re-encrypts to the CURRENT device roster, not a stale one: a device
+// added to the roster after the original AddSecret can still decrypt
+// the rotated value.
+func TestRotateSecretEncryptsToCurrentRoster(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	newcomer, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "newcomer", newcomer.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+
+	const newValue = "rotated-secret-value-789"
+	if err := vault.RotateSecret(v, "openai-key", []byte(newValue)); err != nil {
+		t.Fatal(err)
+	}
+
+	ciphertext, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := age.Decrypt(bytes.NewReader(ciphertext), newcomer)
+	if err != nil {
+		t.Fatalf("the newcomer must decrypt the rotated value: %v", err)
+	}
+	var plaintext bytes.Buffer
+	if _, err := plaintext.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	if plaintext.String() != newValue {
+		t.Fatalf("decrypted value = %q, want %q", plaintext.String(), newValue)
 	}
 }
 

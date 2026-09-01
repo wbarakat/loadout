@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"loadout.dev/loadout/internal/vault"
@@ -98,5 +99,85 @@ func TestDoctorSilentWhenEveryReadableSecretDecrypts(t *testing.T) {
 		t.Fatalf("doctor must never append to the access log, but access.log holds: %q", data)
 	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
+	}
+}
+
+// TestDoctorFlagsSecretDueForRotation proves the rotation reminder: a
+// secret added with a rotate_after of 1ns is due for rotation almost
+// as soon as it lands (any real clock tick since "at" is well past
+// 1ns), and doctor reports it by name with the exact fix text, never
+// the value, and without writing an access-log entry — a rotation
+// check reads only metadata, it is not a use of the secret either.
+func TestDoctorFlagsSecretDueForRotation(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai", "--rotate-after", "1ns"); code != 0 {
+		t.Fatalf("secret add failed: %s", errOut)
+	}
+	// meta.md's "at" carries only second resolution; give SecretDue's
+	// 1ns window a real clock tick to clear.
+	time.Sleep(1100 * time.Millisecond)
+
+	out, errOut, code := run(t, "doctor")
+	if code != 1 {
+		t.Fatalf("doctor must report a problem for a due secret, got %d (%s)", code, errOut)
+	}
+	if !strings.Contains(out, "secret/openai-key: is due for rotation (added ") {
+		t.Fatalf("doctor must name the due secret, got %q", out)
+	}
+	if !strings.Contains(out, ", rotate after 1ns)") {
+		t.Fatalf("doctor must carry the rotate_after value, got %q", out)
+	}
+	if !strings.Contains(out, "fix: rotate the key at openai, then run loadout secret rotate openai-key to replace it.") {
+		t.Fatalf("doctor must carry the exact rotation fix, got %q", out)
+	}
+	if strings.Contains(out, dummySecretValue) || strings.Contains(errOut, dummySecretValue) {
+		t.Fatal("doctor must never print a secret's value")
+	}
+
+	logPath := filepath.Join(base, "vault", "access.log")
+	if data, err := os.ReadFile(logPath); err == nil {
+		t.Fatalf("a rotation check must never append to the access log, but access.log holds: %q", data)
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+// TestDoctorSilentForFreshSecretWithRotateAfter proves the negative
+// case: a secret just added with a long rotate_after is not flagged —
+// only one that has actually elapsed past its window is.
+func TestDoctorSilentForFreshSecretWithRotateAfter(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "sync")
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai", "--rotate-after", "720h"); code != 0 {
+		t.Fatalf("secret add failed: %s", errOut)
+	}
+
+	out, errOut, code := run(t, "doctor")
+	if code != 0 {
+		t.Fatalf("doctor must stay quiet for a fresh secret, got %d: out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(out, "all good") {
+		t.Fatalf("doctor must report all good, got %q", out)
+	}
+}
+
+// TestDoctorSilentForSecretWithNoRotateAfter proves a secret added
+// with no rotate_after at all is never flagged, no matter its age.
+func TestDoctorSilentForSecretWithNoRotateAfter(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "sync")
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai"); code != 0 {
+		t.Fatalf("secret add failed: %s", errOut)
+	}
+
+	out, errOut, code := run(t, "doctor")
+	if code != 0 {
+		t.Fatalf("doctor must stay quiet, got %d: out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(out, "all good") {
+		t.Fatalf("doctor must report all good, got %q", out)
 	}
 }

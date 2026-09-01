@@ -8,8 +8,10 @@ provenance, review, and `--json` on every verb. Phase 3 adds four
 adapters: codex, gemini, cursor, and hermes. The Adapters section
 below covers all six local tools, plus a generic AGENTS.md adapter.
 Phase 4 adds cloud sync: `loadoutd`, device enrollment, and `loadout
-watch`. See the "Sync across your machines" section below. Secrets
-come next. See PLAN.md for the roadmap.
+watch`. See the "Sync across your machines" section below. Phase 5
+adds encrypted secrets: `secret add`, `secret show --reveal`, `secret
+rotate`, and `loadout run` to inject a secret into a child process.
+See the "Secrets" section below. See PLAN.md for the roadmap.
 
 ## Install
 
@@ -58,6 +60,12 @@ lists every verb Loadout supports today.
 | `devices [--json]` | Show every device: approved, waiting, or re-keyed. |
 | `devices approve <name>` | Approve a waiting device. |
 | `devices approve <name> --rotate <recipient>` | Trust a verified new key for an already-approved device. |
+| `secret add <name> --service <svc> [--hook <text>] [--rotate-after <dur>] [--by <who>]` | Add a secret. Pipe the value on stdin. |
+| `secret list [--json]` | Show every secret's metadata. Never shows a value. |
+| `secret show <name> [--reveal] [--by <who>]` | Refuse to print the value by default. Print it only with `--reveal`. |
+| `secret rotate <name> [--by <who>]` | Replace a secret's value. Pipe the new value on stdin. |
+| `secret rm <name>` | Remove a secret. |
+| `run --secret <name>[=ENVVAR] [--secret <name2>...] [--by <who>] -- <cmd> [args...]` | Decrypt secrets and inject them into a child process, then run it. |
 
 Run `loadout help` at any time to print this list from the binary
 itself.
@@ -182,6 +190,109 @@ Set "enabled" to true. List one or more target files under "targets".
 Do not add a second `[adapters.agents-md]` section. Edit the section
 that is already there. Run "loadout sync" to write the block into
 each target file.
+
+## Secrets
+
+Loadout stores your API keys and other secrets in the vault. Each
+secret sits next to your skills and memory. Loadout keeps every
+secret's value encrypted on disk. Only your own device, or a device
+you approve, can read it.
+
+### Add a secret
+
+Pipe the value on stdin. Do not pass it as an argument. An argument
+can appear in your shell history or in a process list:
+
+    printf %s "sk-abc123" | loadout secret add openai-key --service openai
+
+Add `--rotate-after <duration>` to set a rotation reminder. For
+example, use `720h` for 30 days. Add `--hook <text>` to note what the
+secret is for. Add `--by <who>` to record who added it, the same way
+`add skill` and `add memory` do.
+
+### List and show secrets
+
+Run `loadout secret list` to print every secret's metadata: its name,
+its service, and when you added it. This command never prints a
+value.
+
+`loadout secret show <name>` refuses to print a value by default. To
+see the raw value, add `--reveal`:
+
+    loadout secret show openai-key --reveal
+
+Use `--reveal` only when you must see the value yourself, for example
+to copy it into another tool by hand. Each `--reveal` writes one line
+to the access log (see below). For a script or an agent, use `loadout
+run` instead (next section). It gives the secret straight to the
+child process. The agent never has to read the value at all.
+
+### Inject a secret into a command
+
+`loadout run` is the main way an agent uses a secret. It decrypts the
+secret, sets the value as an environment variable in a child process,
+then runs the command. The value never appears in loadout's own
+output:
+
+    loadout run --secret openai-key -- your-tool --flag
+
+This sets `$OPENAI_KEY` in the child process, then runs `your-tool
+--flag`. Loadout derives the variable name from the secret's name. To
+choose your own name, use `--secret <name>=ENVVAR`:
+
+    loadout run --secret openai-key=API_KEY -- your-tool
+
+Add more `--secret` flags to inject more than one value. Add `--by
+<who>` to record who ran the command.
+
+### Rotate a secret
+
+Set `--rotate-after` when you add a secret. `loadout doctor` then
+warns you once the secret is old enough to rotate:
+
+    secret/openai-key: is due for rotation (added 2026-01-01T00:00:00Z, rotate after 720h)
+      fix: rotate the key at openai, then run loadout secret rotate openai-key to replace it.
+
+First, rotate the key at the service itself. Then replace its value
+in the vault:
+
+    printf %s "sk-new456" | loadout secret rotate openai-key
+
+Rotate keeps the secret's service, hook, and rotate-after settings. It
+replaces only the value and the added time. Pipe the new value on
+stdin, the same way `secret add` does. Never pass it as an argument.
+
+### Remove a secret
+
+    loadout secret rm openai-key
+
+This command deletes the secret and its encrypted value for good.
+
+### The access log
+
+Loadout keeps a local access log at `<vault>/access.log`. This file
+stays on your own device; it never syncs. It records every `secret
+show --reveal`, every `secret rotate`, and every `loadout run` call.
+Each line holds the time, the verb, the secret's name, and who ran it.
+It never holds a value. The access log is not part of the vault's git
+history.
+
+### Secrets sync as ciphertext
+
+A secret's `value.age` file syncs across your devices the same way a
+skill or a memory fact does, through `loadout sync --remote` and
+`loadoutd`. `loadoutd` stores ciphertext only. It cannot decrypt a
+secret, and neither can a device you have not approved. When you
+approve a new device, loadout re-encrypts every secret so the new
+device can read it too.
+
+### The invariant
+
+A secret's value never leaves your device in the clear. The two
+exceptions are a child process under `loadout run`, and an explicit
+`--reveal`. The value never appears in loadout's own output, in an
+error message, in the access log, or anywhere on disk outside
+`value.age`.
 
 ## How it stays safe
 

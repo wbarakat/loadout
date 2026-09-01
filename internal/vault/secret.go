@@ -175,6 +175,30 @@ func AddSecret(v *Vault, name, service, hook, rotateAfter, by string, value []by
 	return os.Rename(tmpDir, secretDir(v, name))
 }
 
+// readSecretMeta reads and parses one secret's meta.md into a Secret,
+// falling back to dirName for the Name field when meta.md carries no
+// "name:" line of its own (the same fallback ListSecrets has always
+// used). It never touches value.age.
+func readSecretMeta(v *Vault, dirName string) (Secret, error) {
+	raw, err := os.ReadFile(secretMetaPath(v, dirName))
+	if err != nil {
+		return Secret{}, err
+	}
+	fields, _ := parseFrontmatter(raw)
+	name := fields["name"]
+	if name == "" {
+		name = dirName
+	}
+	return Secret{
+		Name:        name,
+		Service:     fields["service"],
+		Hook:        fields["hook"],
+		RotateAfter: fields["rotate_after"],
+		By:          fields["by"],
+		At:          fields["at"],
+	}, nil
+}
+
 // ListSecrets reads every secret's metadata, in name order. It never
 // touches value.age: a Secret carries no value field, only what
 // meta.md holds in plaintext.
@@ -199,7 +223,7 @@ func ListSecrets(v *Vault) ([]Secret, error) {
 			// a complete secret. AddSecret treats it the same way.
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(v.SecretsDir(), e.Name(), "meta.md"))
+		secret, err := readSecretMeta(v, e.Name())
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				// A directory with no meta.md yet is not a secret:
@@ -208,21 +232,31 @@ func ListSecrets(v *Vault) ([]Secret, error) {
 			}
 			return nil, err
 		}
-		fields, _ := parseFrontmatter(raw)
-		name := fields["name"]
-		if name == "" {
-			name = e.Name()
-		}
-		secrets = append(secrets, Secret{
-			Name:        name,
-			Service:     fields["service"],
-			Hook:        fields["hook"],
-			RotateAfter: fields["rotate_after"],
-			By:          fields["by"],
-			At:          fields["at"],
-		})
+		secrets = append(secrets, secret)
 	}
 	return secrets, nil
+}
+
+// SecretDue reports whether s is due for rotation at now: true only
+// when RotateAfter parses as a non-empty, valid Go duration, At parses
+// as an RFC3339 timestamp, and now is after At plus that duration. A
+// secret with an empty or unparseable RotateAfter, or an unparseable
+// At, is never due — that is a "no reminder set" or "cannot tell"
+// case, not an error, so doctor's rotation check never fails a run
+// over a malformed or hand-edited meta.md.
+func SecretDue(s Secret, now time.Time) bool {
+	if s.RotateAfter == "" {
+		return false
+	}
+	dur, err := time.ParseDuration(s.RotateAfter)
+	if err != nil {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339, s.At)
+	if err != nil {
+		return false
+	}
+	return now.After(at.Add(dur))
 }
 
 // RemoveSecret deletes a secret's whole directory: its metadata and
@@ -376,4 +410,76 @@ func writeSecretValue(v *Vault, name string, recipients []age.Recipient, plainte
 		return err
 	}
 	return os.Rename(tmpPath, secretValuePath(v, name))
+}
+
+// writeSecretMeta atomically replaces secret name's meta.md: a temp
+// file written next to it, then renamed into place, the same pattern
+// writeSecretValue uses for value.age, so a crash mid-write never
+// leaves meta.md half-written.
+func writeSecretMeta(v *Vault, name, content string) error {
+	dir := secretDir(v, name)
+	tmp, err := os.CreateTemp(dir, ".meta.md.tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, secretMetaPath(v, name))
+}
+
+// RotateSecret replaces an existing secret's value: it keeps the
+// secret's own service, hook, rotate_after, and by fields exactly as
+// they were, stamps a fresh at, and re-encrypts newValue to the
+// CURRENT device roster (secretRecipients: roster ∪ self) — the write
+// path AddSecret and ReEncryptSecrets both use.
+//
+// It refuses a name that does not exist yet: rotate replaces a
+// secret's value, it does not create one (use AddSecret for that).
+//
+// value.age is replaced first, then meta.md: if the meta.md rewrite
+// fails after a successful value.age replacement, the new value is
+// already live and safe, and only the rotation timestamp is stale —
+// never the reverse, where meta.md would claim a fresh rotation that
+// never actually replaced the value.
+//
+// newValue is zeroed before RotateSecret returns, on every path, the
+// same way AddSecret zeroes its own caller's buffer.
+//
+// INVARIANT 10: newValue never appears anywhere on disk except as
+// ciphertext inside value.age, and never in an error message.
+func RotateSecret(v *Vault, name string, newValue []byte) error {
+	defer func() {
+		for i := range newValue {
+			newValue[i] = 0
+		}
+	}()
+
+	if !SecretExists(v, name) {
+		return fmt.Errorf("secret/%s: no such secret. Fix: run loadout secret list.", name)
+	}
+	meta, err := readSecretMeta(v, name)
+	if err != nil {
+		return err
+	}
+	recipients, err := secretRecipients(v)
+	if err != nil {
+		return err
+	}
+	if err := writeSecretValue(v, name, recipients, newValue); err != nil {
+		return err
+	}
+	at := time.Now().UTC().Format(time.RFC3339)
+	rendered := renderSecretMeta(meta.Name, meta.Service, meta.Hook, meta.RotateAfter, meta.By, at)
+	return writeSecretMeta(v, name, rendered)
 }

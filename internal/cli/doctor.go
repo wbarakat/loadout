@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"loadout.dev/loadout/internal/adapter"
 	"loadout.dev/loadout/internal/remote"
@@ -38,11 +39,7 @@ type doctorResult struct {
 // no human or tool ever asked for). Every plaintext DecryptSecret
 // hands back is zeroed immediately: doctor never needs the value,
 // only whether the decrypt succeeded.
-func checkSecretReadability(v *vault.Vault) ([]doctorProblem, error) {
-	secrets, err := vault.ListSecrets(v)
-	if err != nil {
-		return nil, err
-	}
+func checkSecretReadability(v *vault.Vault, secrets []vault.Secret) ([]doctorProblem, error) {
 	if len(secrets) == 0 {
 		return nil, nil
 	}
@@ -66,6 +63,29 @@ func checkSecretReadability(v *vault.Vault) ([]doctorProblem, error) {
 		}
 	}
 	return problems, nil
+}
+
+// checkSecretRotation flags every secret whose rotate_after duration
+// has elapsed since it was added: a durable rotation reminder, so a
+// key nobody is watching does not sit unrotated forever. It is a
+// metadata-only check — it reads only Secret's own plaintext fields
+// through vault.SecretDue, and never calls DecryptSecret — so it never
+// touches a value and never needs the readability probe's own
+// device-cannot-read handling.
+func checkSecretRotation(secrets []vault.Secret) []doctorProblem {
+	var problems []doctorProblem
+	now := time.Now().UTC()
+	for _, s := range secrets {
+		if !vault.SecretDue(s, now) {
+			continue
+		}
+		problems = append(problems, doctorProblem{
+			Source: "secret/" + s.Name,
+			Detail: fmt.Sprintf("is due for rotation (added %s, rotate after %s)", s.At, s.RotateAfter),
+			Fix:    fmt.Sprintf("rotate the key at %s, then run loadout secret rotate %s to replace it.", s.Service, s.Name),
+		})
+	}
+	return problems
 }
 
 func cmdDoctor(out, errOut io.Writer, m mode) int {
@@ -107,12 +127,18 @@ func cmdDoctor(out, errOut io.Writer, m mode) int {
 			Fix:    "add a SKILL.md file, or remove the directory",
 		})
 	}
-	secretProblems, err := checkSecretReadability(v)
+	secrets, err := vault.ListSecrets(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	secretProblems, err := checkSecretReadability(v, secrets)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
 	problems = append(problems, secretProblems...)
+	problems = append(problems, checkSecretRotation(secrets)...)
 	for _, a := range adapter.Enabled(v) {
 		for _, p := range a.Check(v) {
 			problems = append(problems, doctorProblem{Source: p.Adapter, Detail: p.Detail, Fix: p.Fix})
