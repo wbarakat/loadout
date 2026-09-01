@@ -29,6 +29,10 @@ interface RawEntrySpec {
    * `body`'s actual length — used to build a malformed archive whose
    * header claims more bytes than the stream actually holds. */
   declaredSize?: number;
+  /** Override the raw bytes of the "size" field entirely, bypassing octal
+   * encoding — used to build a header whose size field is not valid octal
+   * ASCII at all (e.g. digits "8"/"9", or letters). */
+  rawSizeField?: Uint8Array;
 }
 
 function octalField(value: number, width: number): Uint8Array {
@@ -55,7 +59,7 @@ function buildHeader(spec: RawEntrySpec, size: number): Uint8Array {
   block.set(octalField(spec.mode ?? 0o644, 8), 100); // mode
   block.set(octalField(0, 8), 108); // uid
   block.set(octalField(0, 8), 116); // gid
-  block.set(octalField(size, 12), 124); // size
+  block.set(spec.rawSizeField ?? octalField(size, 12), 124); // size
   block.set(octalField(0, 12), 136); // mtime
   block.set(stringField("        ", 8), 148); // checksum placeholder, 8 spaces
   block[156] = spec.typeflag.charCodeAt(0); // typeflag
@@ -228,6 +232,20 @@ describe("readTar", () => {
         typeflag: "0",
         body: new TextEncoder().encode("only a few bytes"),
         declaredSize: 5000,
+      },
+    ]);
+    expect(() => readTar(tar)).toThrow(UnsafeEntryError);
+    expect(() => readTar(tar)).toThrow(/size/i);
+  });
+
+  it("throws UnsafeEntryError when the size field is not valid octal ASCII", () => {
+    const tar = buildTar([
+      {
+        name: "memory/y.md",
+        typeflag: "0",
+        body: new TextEncoder().encode("hi"),
+        // "8" and "9" are not octal digits — parseInt(..., 8) yields NaN.
+        rawSizeField: new TextEncoder().encode("88888888888\0"),
       },
     ]);
     expect(() => readTar(tar)).toThrow(UnsafeEntryError);

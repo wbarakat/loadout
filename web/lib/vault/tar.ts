@@ -172,6 +172,13 @@ export function readTar(tar: Uint8Array): TarEntry[] {
     const size = parseOctalField(
       header.subarray(SIZE_OFFSET, SIZE_OFFSET + SIZE_SIZE),
     );
+    if (!Number.isSafeInteger(size) || size < 0) {
+      // A non-octal size field (e.g. a leading "8"/"9" or a letter) parses
+      // to NaN. NaN fails every ordering comparison, so the overflow check
+      // just below would never trip — the archive would silently
+      // truncate instead of erroring. Catch that here, before it can.
+      throw new UnsafeEntryError("malformed tar entry size field");
+    }
     if (offset + size > tar.length) {
       // A declared size that runs past the end of the archive must not be
       // silently truncated into a short entry, and must not silently
