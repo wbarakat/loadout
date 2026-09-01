@@ -164,11 +164,12 @@ func TestOpenSkipsMigrationWithEmbeddedSkillRepo(t *testing.T) {
 	}
 }
 
-// TestSyncedSet pins the synced set's content: skills, memory, and
-// the device roster. Everything else in the vault is device-local.
+// TestSyncedSet pins the synced set's content: skills, memory, the
+// device roster, and (Phase 5) secrets. Everything else in the vault
+// is device-local.
 func TestSyncedSet(t *testing.T) {
 	got := vault.SyncedSet()
-	want := []string{"skills", "memory", "devices.toml"}
+	want := []string{"skills", "memory", "devices.toml", "secrets"}
 	if len(got) != len(want) {
 		t.Fatalf("SyncedSet() = %v, want %v", got, want)
 	}

@@ -169,20 +169,16 @@ func PackSnapshot(v *Vault) (blob []byte, headHashOut string, err error) {
 	return buf.Bytes(), headHashOut, nil
 }
 
-// packRecipients lists the age recipients a pack must encrypt to:
-// every recipient in devices.toml, sorted by device name, or this
-// device alone when the roster is empty.
-func packRecipients(v *Vault) ([]age.Recipient, error) {
+// rosterRecipients reads devices.toml and returns its recipients,
+// sorted by device name. An empty or absent roster returns an empty,
+// non-nil slice, not an error: a vault with no roster yet is a valid
+// state, not a failure. Both packRecipients (this file) and
+// secretRecipients (secret.go) build on this one function, so the
+// roster is read and parsed in exactly one place.
+func rosterRecipients(v *Vault) ([]age.Recipient, error) {
 	roster, err := ReadRoster(v)
 	if err != nil {
 		return nil, err
-	}
-	if len(roster) == 0 {
-		identity, err := deviceKey(v)
-		if err != nil {
-			return nil, err
-		}
-		return []age.Recipient{identity.Recipient()}, nil
 	}
 	names := make([]string, 0, len(roster))
 	for name := range roster {
@@ -196,6 +192,24 @@ func packRecipients(v *Vault) ([]age.Recipient, error) {
 			return nil, rosterErr(devicesTomlPath(v), fmt.Errorf("device %q holds an invalid recipient", name))
 		}
 		recipients = append(recipients, r)
+	}
+	return recipients, nil
+}
+
+// packRecipients lists the age recipients a pack must encrypt to:
+// every recipient in devices.toml, sorted by device name, or this
+// device alone when the roster is empty.
+func packRecipients(v *Vault) ([]age.Recipient, error) {
+	recipients, err := rosterRecipients(v)
+	if err != nil {
+		return nil, err
+	}
+	if len(recipients) == 0 {
+		identity, err := deviceKey(v)
+		if err != nil {
+			return nil, err
+		}
+		return []age.Recipient{identity.Recipient()}, nil
 	}
 	return recipients, nil
 }

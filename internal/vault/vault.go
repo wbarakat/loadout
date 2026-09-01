@@ -42,22 +42,29 @@ func gitkeepDirs(root string) []string {
 
 // gitignoreContent lists the vault paths git must never track: OS
 // litter, the derived render output, the lock file Lock creates, the
-// device manifest, the device identity, and the sync configuration
-// and state Phase 4 adds. Decision 13 (spec v3.1 §16) keeps the
-// manifest, the device key, the device name, and the remote
-// configuration device-local; only skills, memory, and the device
-// roster sync. remote.toml and .sync-state.json arrive in later
-// tasks; ignoring them now is safe and saves a second edit here.
-const gitignoreContent = ".DS_Store\nrender/\nloadout.lock\nloadout.toml\ndevice.key\ndevice.name\nremote.toml\n.sync-state.json\n"
+// device manifest, the device identity, the sync configuration and
+// state Phase 4 adds, and the Phase 5 secret access log. Decision 13
+// (spec v3.1 §16) keeps the manifest, the device key, the device
+// name, and the remote configuration device-local; only skills,
+// memory, the device roster, and (Phase 5) secrets sync. remote.toml
+// and .sync-state.json arrive in later tasks; ignoring them now is
+// safe and saves a second edit here. access.log is device-local for a
+// different reason than the others: it is Phase 5's record of which
+// secret this device decrypted and when, so it must never sync or
+// enter history — only secrets/*/value.age (ciphertext) does.
+const gitignoreContent = ".DS_Store\nrender/\nloadout.lock\nloadout.toml\ndevice.key\ndevice.name\nremote.toml\n.sync-state.json\naccess.log\n"
 
 // SyncedSet lists the vault paths that sync between devices: skills,
-// memory, and the device roster. Everything else in the vault —
-// the manifest, the device key, the device name, and the remote
-// configuration — is device-local and never syncs. Decision 13
-// (spec v3.1 §16) fixes this split; later sync tasks read this list
-// rather than repeating it.
+// memory, the device roster, and (Phase 5) secrets. secrets/ syncs
+// its ciphertext (every value.age), never a plaintext value: meta.md
+// is plaintext metadata only, and value.age holds nothing else.
+// Everything else in the vault — the manifest, the device key, the
+// device name, the remote configuration, and the access log — is
+// device-local and never syncs. Decision 13 (spec v3.1 §16) fixes
+// this split; later sync tasks read this list rather than repeating
+// it.
 func SyncedSet() []string {
-	return []string{"skills", "memory", "devices.toml"}
+	return []string{"skills", "memory", "devices.toml", "secrets"}
 }
 
 // writeGitignoreIfMissing writes root/.gitignore when no such file
@@ -238,6 +245,7 @@ func checkAbsOrHome(key, value string) error {
 	return fmt.Errorf("the manifest key %s holds a relative path %q. Fix: use an absolute path or a ~ path.", key, value)
 }
 
-func (v *Vault) SkillsDir() string { return filepath.Join(v.Root, "skills") }
-func (v *Vault) MemoryDir() string { return filepath.Join(v.Root, "memory") }
-func (v *Vault) RenderDir() string { return filepath.Join(v.Root, "render") }
+func (v *Vault) SkillsDir() string  { return filepath.Join(v.Root, "skills") }
+func (v *Vault) MemoryDir() string  { return filepath.Join(v.Root, "memory") }
+func (v *Vault) RenderDir() string  { return filepath.Join(v.Root, "render") }
+func (v *Vault) SecretsDir() string { return filepath.Join(v.Root, "secrets") }
