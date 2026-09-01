@@ -93,14 +93,6 @@ func Sync(v *vault.Vault) (Result, error) {
 	base := cfg.LastVersion
 
 	if serverVersion == "" || serverVersion == base {
-		result, pushErr := push(v, client, base)
-		if pushErr == nil {
-			return result, nil
-		}
-		var conflict *ConflictError
-		if !errors.As(pushErr, &conflict) {
-			return Result{}, pushErr
-		}
 		// state.BaseCommit is this device's last confirmed
 		// remote-agreed content — the only base pullMergePush (and
 		// every retry inside it) may ever compare against. See
@@ -109,6 +101,31 @@ func Sync(v *vault.Vault) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
+		// This device is already caught up with the remote. Before
+		// packing and pushing anything, check whether the synced tree
+		// actually moved since the last confirmed sync base. A push
+		// here always used to run unconditionally, minting a new
+		// full-blob version even when nothing changed at all; under
+		// "loadout watch" (a push every beat, forever) that is
+		// unbounded server growth for zero real content change. A
+		// device syncing for the very first time (BaseCommit empty)
+		// has nothing to compare against, so it always counts as
+		// changed: the first push must always run once.
+		changed, err := syncedSetChangedSinceBase(v.Root, state.BaseCommit)
+		if err != nil {
+			return Result{}, err
+		}
+		if !changed {
+			return Result{Version: base}, nil
+		}
+		result, pushErr := push(v, client, base)
+		if pushErr == nil {
+			return result, nil
+		}
+		var conflict *ConflictError
+		if !errors.As(pushErr, &conflict) {
+			return Result{}, pushErr
+		}
 		return pullMergePush(v, client, conflict.Latest, state.BaseCommit, maxMergeRetries)
 	}
 	state, err := readSyncState(v)
@@ -116,6 +133,35 @@ func Sync(v *vault.Vault) (Result, error) {
 		return Result{}, err
 	}
 	return pullMergePush(v, client, serverVersion, state.BaseCommit, maxMergeRetries)
+}
+
+// syncedSetChangedSinceBase reports whether vaultRoot's SyncedSet
+// content (skills/, memory/, devices.toml) differs, path-scoped,
+// between baseCommit and HEAD. An empty baseCommit — no prior
+// confirmed sync — always reports changed: there is nothing yet to
+// compare against, so the very first push must always run once.
+func syncedSetChangedSinceBase(vaultRoot, baseCommit string) (bool, error) {
+	if baseCommit == "" {
+		return true, nil
+	}
+	head, err := headHash(vaultRoot)
+	if err != nil {
+		return false, err
+	}
+	if head == baseCommit {
+		return false, nil
+	}
+	args := append([]string{"-C", vaultRoot, "diff", "--quiet", baseCommit, head, "--"}, vault.SyncedSet()...)
+	cmd := exec.Command("git", args...)
+	err = cmd.Run()
+	if err == nil {
+		return false, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return true, nil
+	}
+	return false, fmt.Errorf("git diff failed: %v", err)
 }
 
 // deviceEstablished reports whether the vault's own devices.toml — the
@@ -183,6 +229,17 @@ func push(v *vault.Vault, client *Client, parent string) (Result, error) {
 func pullMergePush(v *vault.Vault, client *Client, remoteVersion, baseCommit string, retriesLeft int) (Result, error) {
 	if retriesLeft <= 0 {
 		return Result{}, errors.New("the remote changed too fast. Fix: run loadout sync --remote again.")
+	}
+
+	if remoteVersion == "" {
+		// The remote reports no latest version at all: its store was
+		// reset or emptied since this device last saw it, so its own
+		// prior parent no longer matches anything there. There is no
+		// snapshot left to pull and merge against — GetSnapshot("")
+		// would only ever 404. Re-seed the remote from this device's
+		// own current content instead, exactly as a brand-new
+		// remote's very first push does.
+		return push(v, client, "")
 	}
 
 	blob, err := client.GetSnapshot(remoteVersion)
@@ -679,10 +736,18 @@ func LoadStatus(v *vault.Vault) (st Status, ok bool, err error) {
 	if stateErr != nil {
 		return Status{}, true, stateErr
 	}
-	if head, headErr := headHash(v.Root); headErr == nil && state.BaseCommit != "" && head != state.BaseCommit {
-		st.State = "ahead"
-		st.Detail = "this device has local changes not yet pushed"
-		return st, true, nil
+	// Aligned to the same synced-set tree-compare Sync's own
+	// caught-up branch uses (see syncedSetChangedSinceBase): a raw
+	// HEAD comparison would report "ahead" for a commit that only
+	// touches something outside the SyncedSet (skills/, memory/,
+	// devices.toml), which a sync would never push anyway — status
+	// must never lie about that.
+	if state.BaseCommit != "" {
+		if changed, changedErr := syncedSetChangedSinceBase(v.Root, state.BaseCommit); changedErr == nil && changed {
+			st.State = "ahead"
+			st.Detail = "this device has local changes not yet pushed"
+			return st, true, nil
+		}
 	}
 	st.State = "in sync"
 	return st, true, nil

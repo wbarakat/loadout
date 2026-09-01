@@ -303,6 +303,35 @@ func TestSyncRemoteWithDryRunNeverTouchesTheRemote(t *testing.T) {
 	}
 }
 
+// TestSyncDryRunRemotePrintsWouldSyncLineWithoutNetworkCall proves
+// Minor 10: "sync --dry-run --remote" must never silently drop the
+// remote half in text mode. It must print one line naming the
+// remote's url, and it must never touch the network to do it: the
+// remote here points at an address that refuses connections, and the
+// command must still succeed.
+func TestSyncDryRunRemotePrintsWouldSyncLineWithoutNetworkCall(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+	run(t, "add", "skill", "deploy-checks")
+	run(t, "remote", "add", "http://127.0.0.1:1", "some-token")
+
+	out, errOut, code := run(t, "sync", "--remote", "--dry-run")
+	if code != 0 {
+		t.Fatalf("sync --remote --dry-run must succeed even with an unreachable remote (no network call), got %d: %s", code, errOut)
+	}
+	if !strings.Contains(out, "would sync with the remote at http://127.0.0.1:1") {
+		t.Fatalf("bad output: %q", out)
+	}
+
+	rc, errOut2, code2 := run(t, "remote")
+	if code2 != 0 {
+		t.Fatalf("remote failed: %s", errOut2)
+	}
+	if !strings.Contains(rc, "(none yet)") {
+		t.Fatalf("a dry run must never advance the last synced version, got %q", rc)
+	}
+}
+
 func TestStatusShowsRemoteLineWhenConfigured(t *testing.T) {
 	ts, token := newRemoteTestServer(t)
 	setupEnv(t)

@@ -77,9 +77,10 @@ func cmdSync(out, errOut io.Writer, args []string, m mode) int {
 	}
 
 	var remoteResult *syncRemoteResult
+	switch {
 	// A dry run stays a preview: --remote never pushes, pulls, or
 	// merges anything while --dry-run is also set.
-	if wantRemote && !dry {
+	case wantRemote && !dry:
 		res, err := remote.Sync(v)
 		if err != nil {
 			fmt.Fprintln(errOut, err)
@@ -88,6 +89,19 @@ func cmdSync(out, errOut io.Writer, args []string, m mode) int {
 		remoteResult = &syncRemoteResult{Version: res.Version, Pushed: res.Pushed, Merged: res.Merged}
 		if m != modeJSON {
 			fmt.Fprintf(out, "synced with the remote (version %s)\n", res.Version)
+		}
+	case wantRemote && dry:
+		// Still name the remote a real sync would reach, without ever
+		// making a network call: --dry-run must stay a true preview,
+		// but silently dropping the remote half of the preview left a
+		// user with no idea --remote even did anything.
+		cfg, err := remote.Load(v)
+		if err != nil {
+			fmt.Fprintln(errOut, err)
+			return 1
+		}
+		if m != modeJSON {
+			fmt.Fprintf(out, "would sync with the remote at %s\n", cfg.URL)
 		}
 	}
 
