@@ -241,7 +241,7 @@ func TestDevicesJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddToRoster(v, "device-a", recipient); err != nil {
+	if err := vault.AddToRoster(v, "device-a", recipient, vault.RoleFull); err != nil {
 		t.Fatal(err)
 	}
 	if err := vault.Snapshot(v, "approve device device-a"); err != nil {
@@ -750,7 +750,7 @@ func pushCompetingRoster(t *testing.T, store *server.Store, parent string, roste
 		t.Fatal(err)
 	}
 	for name, recipient := range roster {
-		if err := vault.AddToRoster(v, name, recipient); err != nil {
+		if err := vault.AddToRoster(v, name, recipient, vault.RoleFull); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -943,7 +943,7 @@ func TestDevicesUnionIncludesLocalOnlyEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddToRoster(v, "offline-device", identity.Recipient().String()); err != nil {
+	if err := vault.AddToRoster(v, "offline-device", identity.Recipient().String(), vault.RoleFull); err != nil {
 		t.Fatal(err)
 	}
 	if err := vault.Snapshot(v, "add offline-device to the roster by hand"); err != nil {
@@ -1385,10 +1385,10 @@ func TestDevicesApproveAlreadyMatchesRetriesReEncryption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddToRoster(vA, "device-a", aRecipient); err != nil {
+	if err := vault.AddToRoster(vA, "device-a", aRecipient, vault.RoleFull); err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddToRoster(vA, "device-b", bRecipient); err != nil {
+	if err := vault.AddToRoster(vA, "device-b", bRecipient, vault.RoleFull); err != nil {
 		t.Fatal(err)
 	}
 	if err := vault.Snapshot(vA, "simulate a roster write with no re-encrypt yet"); err != nil {

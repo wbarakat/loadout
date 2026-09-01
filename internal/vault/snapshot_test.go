@@ -249,10 +249,10 @@ func TestPackSnapshotEncryptsToEveryRosterRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := AddToRoster(v, "this-device", ownRecipient); err != nil {
+	if err := AddToRoster(v, "this-device", ownRecipient, RoleFull); err != nil {
 		t.Fatal(err)
 	}
-	if err := AddToRoster(v, "other-device", other.Recipient().String()); err != nil {
+	if err := AddToRoster(v, "other-device", other.Recipient().String(), RoleFull); err != nil {
 		t.Fatal(err)
 	}
 	if err := Snapshot(v, "add the device roster"); err != nil {
@@ -629,18 +629,18 @@ func TestReadRosterAbsentFileIsEmpty(t *testing.T) {
 // added in, since two devices sharing a roster must agree on it.
 func TestAddToRosterIsStableAndSorted(t *testing.T) {
 	v1 := newSnapshotTestVault(t)
-	if err := AddToRoster(v1, "zzz-device", "age1zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzqqqqqqq"); err != nil {
+	if err := AddToRoster(v1, "zzz-device", "age1zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzqqqqqqq", RoleFull); err != nil {
 		t.Fatal(err)
 	}
-	if err := AddToRoster(v1, "aaa-device", "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq"); err != nil {
+	if err := AddToRoster(v1, "aaa-device", "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq", RoleFull); err != nil {
 		t.Fatal(err)
 	}
 
 	v2 := newSnapshotTestVault(t)
-	if err := AddToRoster(v2, "aaa-device", "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq"); err != nil {
+	if err := AddToRoster(v2, "aaa-device", "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq", RoleFull); err != nil {
 		t.Fatal(err)
 	}
-	if err := AddToRoster(v2, "zzz-device", "age1zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzqqqqqqq"); err != nil {
+	if err := AddToRoster(v2, "zzz-device", "age1zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzqqqqqqq", RoleFull); err != nil {
 		t.Fatal(err)
 	}
 
@@ -683,5 +683,139 @@ func TestReadRosterMalformedFileGivesFixedError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Fix: repair the file, or remove it to sync with this device only.") {
 		t.Fatalf("bad error: %v", err)
+	}
+}
+
+// TestRoleRoundTripFullAndNoSecrets proves AddToRoster and
+// ReadRosterEntries round-trip both recognized role values exactly.
+func TestRoleRoundTripFullAndNoSecrets(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	if err := AddToRoster(v, "laptop", "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq", RoleFull); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddToRoster(v, "dashboard", "age1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbqqqqqqq", RoleNoSecrets); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ReadRosterEntries(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries["laptop"].Role != RoleFull {
+		t.Fatalf("laptop role = %q, want %q", entries["laptop"].Role, RoleFull)
+	}
+	if entries["dashboard"].Role != RoleNoSecrets {
+		t.Fatalf("dashboard role = %q, want %q", entries["dashboard"].Role, RoleNoSecrets)
+	}
+	if entries["laptop"].Recipient != "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq" {
+		t.Fatalf("bad laptop recipient: %+v", entries["laptop"])
+	}
+}
+
+// TestRoleAbsentReadsAsFull proves a devices.toml entry with no role
+// field at all — every device enrolled before Phase 8a — reads back
+// as RoleFull, so an existing vault keeps every device's secrets
+// access unchanged.
+func TestRoleAbsentReadsAsFull(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	path := devicesTomlPath(v)
+	content := "[devices.old-laptop]\nrecipient = \"age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ReadRosterEntries(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries["old-laptop"].Role != RoleFull {
+		t.Fatalf("an absent role must read as %q, got %q", RoleFull, entries["old-laptop"].Role)
+	}
+}
+
+// TestRoleUnknownReadsAsNoSecretsFailClosed proves an unrecognized
+// on-disk role string — a typo, or a future role this build does not
+// know about — reads as RoleNoSecrets, never RoleFull: a typo must
+// never leak a secret to a device nobody meant to grant it to.
+func TestRoleUnknownReadsAsNoSecretsFailClosed(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	path := devicesTomlPath(v)
+	content := "[devices.typo-device]\nrecipient = \"age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq\"\nrole = \"full-secrets\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ReadRosterEntries(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries["typo-device"].Role != RoleNoSecrets {
+		t.Fatalf("an unrecognized role must fail closed to %q, got %q", RoleNoSecrets, entries["typo-device"].Role)
+	}
+}
+
+// TestAddToRosterRejectsInvalidRoleAtWrite proves AddToRoster refuses
+// to write an unrecognized role string, with the fixed grammar this
+// error uses. An invalid role must never reach devices.toml: read-time
+// fail-closed (RoleNoSecrets) covers a hand-edited file, but a fresh
+// write gets a clear error instead.
+func TestAddToRosterRejectsInvalidRoleAtWrite(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	err := AddToRoster(v, "dashboard", "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq", "readonly")
+	if err == nil {
+		t.Fatal("AddToRoster must refuse an unrecognized role")
+	}
+	want := `invalid device role "readonly". Fix: use full or no-secrets.`
+	if err.Error() != want {
+		t.Fatalf("bad error: got %q want %q", err.Error(), want)
+	}
+	entries, rerr := ReadRosterEntries(v)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if _, ok := entries["dashboard"]; ok {
+		t.Fatal("a rejected write must not add the device to the roster")
+	}
+}
+
+// TestAddToRosterEmptyRoleDefaultsToFull proves an empty role string
+// at write time defaults to RoleFull, the same as the interface
+// contract for a caller (Task 3's enrollment path, say) that has no
+// role to pass yet.
+func TestAddToRosterEmptyRoleDefaultsToFull(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	if err := AddToRoster(v, "laptop", "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq", ""); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ReadRosterEntries(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries["laptop"].Role != RoleFull {
+		t.Fatalf("an empty role at write must default to %q, got %q", RoleFull, entries["laptop"].Role)
+	}
+}
+
+// TestReadRosterReturnsRecipientsRegardlessOfRole proves the
+// existing, recipients-only ReadRoster still works for its current
+// callers: it returns every device's recipient no matter what role
+// that device holds.
+func TestReadRosterReturnsRecipientsRegardlessOfRole(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	if err := AddToRoster(v, "laptop", "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq", RoleFull); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddToRoster(v, "dashboard", "age1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbqqqqqqq", RoleNoSecrets); err != nil {
+		t.Fatal(err)
+	}
+	roster, err := ReadRoster(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roster) != 2 {
+		t.Fatalf("roster = %v, want 2 entries", roster)
+	}
+	if roster["laptop"] != "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqqq" {
+		t.Fatalf("bad laptop recipient: %q", roster["laptop"])
+	}
+	if roster["dashboard"] != "age1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbqqqqqqq" {
+		t.Fatalf("bad dashboard recipient: %q", roster["dashboard"])
 	}
 }

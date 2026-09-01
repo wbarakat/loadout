@@ -147,10 +147,10 @@ func TestAddSecretEncryptsToEveryRosterRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddToRoster(v, "this-device", ownRecipient); err != nil {
+	if err := vault.AddToRoster(v, "this-device", ownRecipient, vault.RoleFull); err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddToRoster(v, "other-device", other.Recipient().String()); err != nil {
+	if err := vault.AddToRoster(v, "other-device", other.Recipient().String(), vault.RoleFull); err != nil {
 		t.Fatal(err)
 	}
 
@@ -188,7 +188,7 @@ func TestAddSecretAlwaysIncludesSelfEvenWhenNotEnrolled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddToRoster(v, "other-device", other.Recipient().String()); err != nil {
+	if err := vault.AddToRoster(v, "other-device", other.Recipient().String(), vault.RoleFull); err != nil {
 		t.Fatal(err)
 	}
 
@@ -479,7 +479,7 @@ func TestReEncryptSecretsAddsNewRecipient(t *testing.T) {
 		t.Fatal("the newcomer must not be able to decrypt the secret before it joins the roster")
 	}
 
-	if err := vault.AddToRoster(v, "newcomer", newcomer.Recipient().String()); err != nil {
+	if err := vault.AddToRoster(v, "newcomer", newcomer.Recipient().String(), vault.RoleFull); err != nil {
 		t.Fatal(err)
 	}
 
@@ -538,7 +538,7 @@ func TestReEncryptSecretsLeavesMetaUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddToRoster(v, "other-device", other.Recipient().String()); err != nil {
+	if err := vault.AddToRoster(v, "other-device", other.Recipient().String(), vault.RoleFull); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := vault.ReEncryptSecrets(v); err != nil {
@@ -782,7 +782,7 @@ func TestRotateSecretEncryptsToCurrentRoster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddToRoster(v, "newcomer", newcomer.Recipient().String()); err != nil {
+	if err := vault.AddToRoster(v, "newcomer", newcomer.Recipient().String(), vault.RoleFull); err != nil {
 		t.Fatal(err)
 	}
 

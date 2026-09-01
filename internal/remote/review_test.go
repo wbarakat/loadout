@@ -59,7 +59,7 @@ func enrollAll(t *testing.T, vaults ...*vault.Vault) {
 	}
 	for _, v := range vaults {
 		for _, i := range ids {
-			if err := vault.AddToRoster(v, i.name, i.recipient); err != nil {
+			if err := vault.AddToRoster(v, i.name, i.recipient, vault.RoleFull); err != nil {
 				t.Fatal(err)
 			}
 		}

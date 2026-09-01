@@ -24,11 +24,63 @@ func devicesTomlPath(v *Vault) string { return filepath.Join(v.Root, "devices.to
 // rosterDevice is one entry of the on-disk device roster.
 type rosterDevice struct {
 	Recipient string `toml:"recipient"`
+	// Role is the on-disk role string, exactly as devices.toml holds
+	// it: empty when absent (a pre-Phase-8a entry, or a hand edit),
+	// or whatever AddToRoster wrote. RosterEntry normalizes this
+	// into a recognized role; rosterDevice itself never normalizes
+	// anything, so writeRosterFile can round-trip a value
+	// byte-for-byte.
+	Role string `toml:"role,omitempty"`
 }
 
 // rosterFile is the on-disk shape of devices.toml.
 type rosterFile struct {
 	Devices map[string]rosterDevice `toml:"devices"`
+}
+
+// RoleFull is a device that syncs the vault and can decrypt secrets:
+// the default role, and the only role every device had before Phase
+// 8a added roles at all.
+const RoleFull = "full"
+
+// RoleNoSecrets is a device that syncs the vault but must never
+// decrypt secrets — a browser dashboard, for example. Task 2 makes
+// secretRecipients skip a no-secrets device when it builds a secret's
+// encryption list.
+const RoleNoSecrets = "no-secrets"
+
+// normalizeRole maps an on-disk role string to a recognized role.
+// Empty (the field was absent) reads as RoleFull: every device
+// enrolled before Phase 8a had no role field at all, and must keep
+// its secrets access unchanged. Any other unrecognized string reads
+// as RoleNoSecrets: FAIL CLOSED, so a typo in devices.toml can never
+// leak a secret to a device nobody meant to grant it to. doctor is
+// the place that later warns about such a typo; this function only
+// decides what the role means right now.
+func normalizeRole(raw string) string {
+	switch raw {
+	case "", RoleFull:
+		return RoleFull
+	case RoleNoSecrets:
+		return RoleNoSecrets
+	default:
+		return RoleNoSecrets
+	}
+}
+
+// validateRoleForWrite reports whether role is a value AddToRoster
+// may write to devices.toml. Unlike normalizeRole (used on READ,
+// where an unrecognized string must fail closed rather than fail the
+// whole read), a WRITE of an unrecognized role is refused outright:
+// the operator typing it gets a clear error now, instead of a silent
+// no-secrets device discovered later by doctor.
+func validateRoleForWrite(role string) error {
+	switch role {
+	case RoleFull, RoleNoSecrets:
+		return nil
+	default:
+		return fmt.Errorf("invalid device role %q. Fix: use full or no-secrets.", role)
+	}
 }
 
 // rosterErr wraps cause in the fixed grammar every devices.toml
@@ -38,48 +90,91 @@ func rosterErr(path string, cause error) error {
 	return fmt.Errorf("%s: the device roster cannot be read: %v. Fix: repair the file, or remove it to sync with this device only.", path, cause)
 }
 
-// ReadRoster reads the vault's device roster: device name to age
-// recipient. A vault with no devices.toml yet has an empty roster,
+// RosterEntry is one device's normalized roster entry: its age
+// recipient, and its role (RoleFull or RoleNoSecrets — never any
+// other value; see normalizeRole).
+type RosterEntry struct {
+	Recipient string
+	Role      string
+}
+
+// readRosterFile reads and decodes devices.toml into its on-disk
+// shape. A vault with no devices.toml yet decodes as an empty roster,
 // not an error — every vault starts out synced to just this device.
-func ReadRoster(v *Vault) (map[string]string, error) {
+func readRosterFile(v *Vault) (rosterFile, error) {
 	rosterPath := devicesTomlPath(v)
 	var rf rosterFile
 	if _, err := toml.DecodeFile(rosterPath, &rf); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return map[string]string{}, nil
+			return rosterFile{}, nil
 		}
-		return nil, rosterErr(rosterPath, err)
+		return rosterFile{}, rosterErr(rosterPath, err)
 	}
-	roster := make(map[string]string, len(rf.Devices))
+	return rf, nil
+}
+
+// ReadRosterEntries reads the vault's device roster: device name to
+// its normalized RosterEntry (recipient and role). See normalizeRole
+// for how an absent or unrecognized on-disk role string normalizes.
+func ReadRosterEntries(v *Vault) (map[string]RosterEntry, error) {
+	rf, err := readRosterFile(v)
+	if err != nil {
+		return nil, err
+	}
+	entries := make(map[string]RosterEntry, len(rf.Devices))
 	for name, d := range rf.Devices {
-		roster[name] = d.Recipient
+		entries[name] = RosterEntry{Recipient: d.Recipient, Role: normalizeRole(d.Role)}
+	}
+	return entries, nil
+}
+
+// ReadRoster reads the vault's device roster: device name to age
+// recipient. A vault with no devices.toml yet has an empty roster,
+// not an error — every vault starts out synced to just this device.
+// It ignores role entirely; callers that need it use
+// ReadRosterEntries instead.
+func ReadRoster(v *Vault) (map[string]string, error) {
+	entries, err := ReadRosterEntries(v)
+	if err != nil {
+		return nil, err
+	}
+	roster := make(map[string]string, len(entries))
+	for name, e := range entries {
+		roster[name] = e.Recipient
 	}
 	return roster, nil
 }
 
-// AddToRoster adds name and recipient to the vault's device roster,
-// writing the file atomically with sorted, stable output. It does
+// AddToRoster adds name, recipient, and role to the vault's device
+// roster, writing the file atomically with sorted, stable output. An
+// empty role defaults to RoleFull; any other value must be
+// RoleNoSecrets or the call fails — see validateRoleForWrite. It does
 // not snapshot the vault: callers that want the change in history
 // call Snapshot themselves.
-func AddToRoster(v *Vault, name, recipient string) error {
-	roster, err := ReadRoster(v)
+func AddToRoster(v *Vault, name, recipient, role string) error {
+	if role == "" {
+		role = RoleFull
+	}
+	if err := validateRoleForWrite(role); err != nil {
+		return err
+	}
+	rf, err := readRosterFile(v)
 	if err != nil {
 		return err
 	}
-	roster[name] = recipient
-	return writeRoster(v, roster)
+	if rf.Devices == nil {
+		rf.Devices = make(map[string]rosterDevice, 1)
+	}
+	rf.Devices[name] = rosterDevice{Recipient: recipient, Role: role}
+	return writeRosterFile(v, rf)
 }
 
-// writeRoster encodes roster to devices.toml. It writes a temp file
+// writeRosterFile encodes rf to devices.toml. It writes a temp file
 // first and renames it into place, so a crash mid-write never leaves
 // a half-written roster behind. github.com/BurntSushi/toml sorts map
 // keys before it encodes them, so the output is stable across calls
 // that add the same devices.
-func writeRoster(v *Vault, roster map[string]string) error {
-	rf := rosterFile{Devices: make(map[string]rosterDevice, len(roster))}
-	for name, recipient := range roster {
-		rf.Devices[name] = rosterDevice{Recipient: recipient}
-	}
+func writeRosterFile(v *Vault, rf rosterFile) error {
 	rosterPath := devicesTomlPath(v)
 	tmp := rosterPath + ".tmp"
 	f, err := os.Create(tmp)

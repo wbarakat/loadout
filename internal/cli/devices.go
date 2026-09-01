@@ -430,11 +430,11 @@ func approvePlain(v *vault.Vault, name, recipient string) (approveResult, error)
 		if err != nil {
 			return approveResult{}, err
 		}
-		if err := vault.AddToRoster(v, ownName, ownRecipient); err != nil {
+		if err := vault.AddToRoster(v, ownName, ownRecipient, vault.RoleFull); err != nil {
 			return approveResult{}, err
 		}
 	}
-	if err := vault.AddToRoster(v, name, recipient); err != nil {
+	if err := vault.AddToRoster(v, name, recipient, vault.RoleFull); err != nil {
 		return approveResult{}, err
 	}
 	// Re-encrypt every secret to the roster as it now stands — the new
@@ -485,11 +485,11 @@ func rotateDevice(v *vault.Vault, name, recipient string) (approveResult, error)
 		if err != nil {
 			return approveResult{}, err
 		}
-		if err := vault.AddToRoster(v, ownName, ownRecipient); err != nil {
+		if err := vault.AddToRoster(v, ownName, ownRecipient, vault.RoleFull); err != nil {
 			return approveResult{}, err
 		}
 	}
-	if err := vault.AddToRoster(v, name, recipient); err != nil {
+	if err := vault.AddToRoster(v, name, recipient, vault.RoleFull); err != nil {
 		return approveResult{}, err
 	}
 	// Same ordering as approvePlain: re-encrypt to the post-rotation

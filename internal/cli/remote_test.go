@@ -79,10 +79,10 @@ func enrollDevicesMutually(t *testing.T, rootA, rootB string) {
 		t.Fatal(err)
 	}
 	for _, v := range []*vault.Vault{va, vb} {
-		if err := vault.AddToRoster(v, aName, aRecipient); err != nil {
+		if err := vault.AddToRoster(v, aName, aRecipient, vault.RoleFull); err != nil {
 			t.Fatal(err)
 		}
-		if err := vault.AddToRoster(v, bName, bRecipient); err != nil {
+		if err := vault.AddToRoster(v, bName, bRecipient, vault.RoleFull); err != nil {
 			t.Fatal(err)
 		}
 		if err := vault.Snapshot(v, "enroll devices"); err != nil {
