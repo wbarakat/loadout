@@ -328,6 +328,31 @@ func TestRunCommandNotFoundExitsOneWithFixedMessage(t *testing.T) {
 	}
 }
 
+// TestRunRefusesPathTraversalSecretName proves "loadout run" closes
+// the path-traversal BLOCKER: a "--secret" name carrying ".."
+// components is refused as a usage error BEFORE the vault is even
+// opened, the child is never started, and the directory the name
+// would otherwise resolve to (outside the whole vault) survives
+// untouched.
+func TestRunRefusesPathTraversalSecretName(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	sentinel := plantSentinel(t, base)
+
+	childSentinel := filepath.Join(base, "child-ran")
+	_, errOut, code := run(t, "run", "--secret", hostileSecretName+"=FOO", "--", "sh", "-c", "touch "+childSentinel)
+	if code != 2 {
+		t.Fatalf("want exit 2, got %d (%s)", code, errOut)
+	}
+	if !strings.Contains(errOut, "not a valid secret name") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+	if _, err := os.Stat(childSentinel); !os.IsNotExist(err) {
+		t.Fatal("the child must never run when the secret name is invalid")
+	}
+	assertSentinelSurvives(t, sentinel)
+}
+
 // TestRunJSONFlagIsRejected proves --json before "--" is refused, and
 // TestRunJSONAfterSeparatorReachesTheChild proves the same token
 // after "--" is left alone: it belongs to the child, not to loadout.

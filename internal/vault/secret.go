@@ -44,12 +44,38 @@ func secretValuePath(v *Vault, name string) string {
 	return filepath.Join(secretDir(v, name), "value.age")
 }
 
+// ValidateSecretName reports whether name is a valid secret name — the
+// same kebab-case grammar every scaffolded item name uses. Every
+// function on this page that turns name into a filesystem path
+// (secretDir, and so secretMetaPath and secretValuePath) calls this
+// FIRST, before touching disk at all.
+//
+// This closes a path-traversal hole: filepath.Join cleans ".."
+// components, so an unvalidated name like "../../outside-vault-target"
+// would resolve to a path OUTSIDE the vault's secrets/ directory
+// entirely. RemoveSecret would then delete that outside directory,
+// and DecryptSecret or RotateSecret would read or overwrite it — all
+// three a destructive Invariant-2/3 violation reachable from any
+// attacker-influenced name (a hostile --secret flag on "loadout run",
+// for example). Validating the grammar up front means the join can
+// never see a name shaped like a path in the first place.
+func ValidateSecretName(name string) error {
+	if !namePattern.MatchString(name) {
+		return fmt.Errorf("%s: not a valid secret name. Fix: use a kebab-case name like openai-key.", name)
+	}
+	return nil
+}
+
 // SecretExists reports whether a secret named name has BOTH its
 // metadata and its encrypted value on disk. A directory holding only
 // one of the two — debris from a write AddSecret never finished, or a
 // hand-edited vault — does not count as a real secret: AddSecret
-// treats it as absent and safe to replace.
+// treats it as absent and safe to replace. An invalid name (see
+// ValidateSecretName) is always reported absent, never stat'd.
 func SecretExists(v *Vault, name string) bool {
+	if ValidateSecretName(name) != nil {
+		return false
+	}
 	if _, err := os.Stat(secretMetaPath(v, name)); err != nil {
 		return false
 	}
@@ -120,8 +146,8 @@ func AddSecret(v *Vault, name, service, hook, rotateAfter, by string, value []by
 		}
 	}()
 
-	if !namePattern.MatchString(name) {
-		return fmt.Errorf("use a kebab-case name, for example: openai-key")
+	if err := ValidateSecretName(name); err != nil {
+		return err
 	}
 	if SecretExists(v, name) {
 		return fmt.Errorf("the secret %s already exists. Fix: choose another name, or rotate the existing secret.", name)
@@ -262,6 +288,9 @@ func SecretDue(s Secret, now time.Time) bool {
 // RemoveSecret deletes a secret's whole directory: its metadata and
 // its encrypted value together.
 func RemoveSecret(v *Vault, name string) error {
+	if err := ValidateSecretName(name); err != nil {
+		return err
+	}
 	if !SecretExists(v, name) {
 		return fmt.Errorf("secret/%s: no such item. Fix: run loadout secret list.", name)
 	}
@@ -278,6 +307,9 @@ func RemoveSecret(v *Vault, name string) error {
 // only the secret, never the value — there is no value to name yet in
 // either case.
 func DecryptSecret(v *Vault, name string) ([]byte, error) {
+	if err := ValidateSecretName(name); err != nil {
+		return nil, err
+	}
 	if !SecretExists(v, name) {
 		return nil, fmt.Errorf("secret/%s: no such secret. Fix: run loadout secret list.", name)
 	}
@@ -465,6 +497,9 @@ func RotateSecret(v *Vault, name string, newValue []byte) error {
 		}
 	}()
 
+	if err := ValidateSecretName(name); err != nil {
+		return err
+	}
 	if !SecretExists(v, name) {
 		return fmt.Errorf("secret/%s: no such secret. Fix: run loadout secret list.", name)
 	}

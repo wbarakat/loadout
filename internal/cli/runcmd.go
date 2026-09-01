@@ -165,6 +165,16 @@ func cmdRun(out, errOut io.Writer, args []string, m mode) int {
 		fmt.Fprintln(errOut, err)
 		return 2
 	}
+	// Validate every --secret name before the vault is even opened: a
+	// name shaped like a path (for example "../x") must be refused as
+	// a usage error here, never passed down to DecryptSecret, so a
+	// hostile name can never reach the filesystem at all.
+	for _, spec := range parsed.secrets {
+		if err := vault.ValidateSecretName(spec.name); err != nil {
+			fmt.Fprintln(errOut, err)
+			return 2
+		}
+	}
 	by := ""
 	if parsed.by != "" {
 		validated, err := validateBy(parsed.by)

@@ -807,6 +807,88 @@ func TestRotateSecretEncryptsToCurrentRoster(t *testing.T) {
 	}
 }
 
+// TestPathTraversalNameRefusedByEveryVerb proves the path-traversal
+// BLOCKER is closed: a name carrying ".." components is refused by
+// every verb that turns a name into a filesystem path, and a sentinel
+// file OUTSIDE secrets/ — placed at exactly the path filepath.Join
+// would have cleaned the hostile name down to — survives every one of
+// them untouched.
+func TestPathTraversalNameRefusedByEveryVerb(t *testing.T) {
+	v := newVault(t)
+	const hostileName = "../../../outside-vault-target"
+
+	// This is exactly the directory filepath.Join(v.SecretsDir(),
+	// hostileName) resolves to once its ".." components are cleaned:
+	// the directory a hostile name would destroy, read, or overwrite
+	// if any verb below skipped name validation. It carries a meta.md
+	// AND a value.age, the shape SecretExists treats as a real secret
+	// — the exact condition that let the unvalidated code past its
+	// "no such secret" guard and on to the destructive call — plus a
+	// third sentinel file with no special meaning to any secret verb,
+	// so its survival proves the directory was never touched at all.
+	sentinelDir := filepath.Join(v.SecretsDir(), hostileName)
+	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sentinelDir, "meta.md"), []byte("---\nname: outside-vault-target\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sentinelDir, "value.age"), []byte("bogus-ciphertext"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sentinelFile := filepath.Join(sentinelDir, "sentinel.txt")
+	if err := os.WriteFile(sentinelFile, []byte("do not delete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if vault.SecretExists(v, hostileName) {
+		t.Fatal("SecretExists must be false for a path-traversal name, even one shaped like a real secret")
+	}
+	if err := vault.RemoveSecret(v, hostileName); err == nil {
+		t.Fatal("RemoveSecret must refuse a path-traversal name")
+	}
+	if _, err := vault.DecryptSecret(v, hostileName); err == nil {
+		t.Fatal("DecryptSecret must refuse a path-traversal name")
+	}
+	if err := vault.RotateSecret(v, hostileName, []byte("x")); err == nil {
+		t.Fatal("RotateSecret must refuse a path-traversal name")
+	}
+	if err := vault.AddSecret(v, hostileName, "svc", "", "", "human", []byte("x")); err == nil {
+		t.Fatal("AddSecret must refuse a path-traversal name")
+	}
+
+	// The whole directory — meta.md, value.age, and the sentinel —
+	// must survive every one of the calls above, byte for byte.
+	for _, f := range []string{"meta.md", "value.age", "sentinel.txt"} {
+		if _, err := os.Stat(filepath.Join(sentinelDir, f)); err != nil {
+			t.Fatalf("%s outside secrets/ must survive every hostile-name verb, got err=%v", f, err)
+		}
+	}
+	data, err := os.ReadFile(sentinelFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "do not delete" {
+		t.Fatal("the sentinel's content must be untouched")
+	}
+}
+
+// TestValidateSecretNameGrammar pins the exact error grammar every
+// verb's refusal shares.
+func TestValidateSecretNameGrammar(t *testing.T) {
+	err := vault.ValidateSecretName("../x")
+	if err == nil {
+		t.Fatal("must refuse a path-traversal name")
+	}
+	want := "../x: not a valid secret name. Fix: use a kebab-case name like openai-key."
+	if err.Error() != want {
+		t.Fatalf("bad error: got %q want %q", err.Error(), want)
+	}
+	if err := vault.ValidateSecretName("openai-key"); err != nil {
+		t.Fatalf("a valid kebab-case name must be accepted: %v", err)
+	}
+}
+
 // TestReEncryptSecretsOnEmptyVault proves a vault with no secrets at
 // all is a no-op: no error, no skipped names.
 func TestReEncryptSecretsOnEmptyVault(t *testing.T) {

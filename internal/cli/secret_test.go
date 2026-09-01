@@ -372,6 +372,120 @@ func TestSecretShowErrorsNeverContainTheValue(t *testing.T) {
 	}
 }
 
+// hostileSecretName is a path-traversal name three levels deep,
+// matching the depth of the proven-live exploit: "secret rm" on this
+// name used to delete a directory OUTSIDE the whole vault, not just
+// outside secrets/.
+const hostileSecretName = "../../../outside-vault-target"
+
+// plantSentinel creates a directory at exactly the path
+// filepath.Join(<vault>/secrets, hostileSecretName) resolves to once
+// its ".." components are cleaned — the path a hostile secret name
+// would destroy, read, or overwrite if the CLI layer forwarded it to
+// the vault unvalidated. The directory carries a meta.md AND a
+// value.age, the shape vault.SecretExists treats as a real secret —
+// the exact condition that would let an unvalidated name past the "no
+// such secret" guard and on to the destructive call — plus a third
+// sentinel file with no special meaning to any secret verb, so its
+// survival proves the directory was never touched. It returns the
+// sentinel file's path so the caller can assert that.
+func plantSentinel(t *testing.T, base string) string {
+	t.Helper()
+	dir := filepath.Join(base, "vault", "secrets", hostileSecretName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.md"), []byte("---\nname: outside-vault-target\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "value.age"), []byte("bogus-ciphertext"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "sentinel.txt")
+	if err := os.WriteFile(file, []byte("do not delete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// assertSentinelSurvives re-reads the sentinel file, and its meta.md
+// and value.age siblings, and fails the test unless every one of them
+// is exactly as plantSentinel left it.
+func assertSentinelSurvives(t *testing.T, file string) {
+	t.Helper()
+	dir := filepath.Dir(file)
+	for _, f := range []string{"meta.md", "value.age", "sentinel.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Fatalf("%s outside secrets/ must survive, got err=%v", f, err)
+		}
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("the sentinel outside secrets/ must survive, got err=%v", err)
+	}
+	if string(data) != "do not delete" {
+		t.Fatal("the sentinel's content must be untouched")
+	}
+}
+
+// TestSecretRmRefusesPathTraversalName proves the CLI layer closes the
+// path-traversal BLOCKER too: "secret rm" on a hostile name is
+// refused, and the directory that name would otherwise resolve to,
+// outside the whole vault, survives untouched.
+func TestSecretRmRefusesPathTraversalName(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	sentinel := plantSentinel(t, base)
+
+	_, errOut, code := run(t, "secret", "rm", hostileSecretName)
+	if code == 0 {
+		t.Fatalf("secret rm must refuse a path-traversal name, got exit 0 (%s)", errOut)
+	}
+	if !strings.Contains(errOut, "not a valid secret name") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+	assertSentinelSurvives(t, sentinel)
+}
+
+// TestSecretShowRevealRefusesPathTraversalName proves "secret show
+// --reveal" on a hostile name is refused before any read is even
+// attempted at the resolved path, and never prints anything.
+func TestSecretShowRevealRefusesPathTraversalName(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	sentinel := plantSentinel(t, base)
+
+	out, errOut, code := run(t, "secret", "show", hostileSecretName, "--reveal")
+	if code == 0 {
+		t.Fatalf("secret show --reveal must refuse a path-traversal name, got exit 0")
+	}
+	if out != "" {
+		t.Fatalf("must print nothing to stdout, got %q", out)
+	}
+	if !strings.Contains(errOut, "not a valid secret name") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+	assertSentinelSurvives(t, sentinel)
+}
+
+// TestSecretRotateRefusesPathTraversalName proves "secret rotate" on a
+// hostile name is refused before the piped stdin value is ever used
+// to overwrite anything at the resolved path.
+func TestSecretRotateRefusesPathTraversalName(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	sentinel := plantSentinel(t, base)
+
+	_, errOut, code := runWithStdin(t, dummySecretValue, "secret", "rotate", hostileSecretName)
+	if code == 0 {
+		t.Fatalf("secret rotate must refuse a path-traversal name, got exit 0")
+	}
+	if !strings.Contains(errOut, "not a valid secret name") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+	assertSentinelSurvives(t, sentinel)
+}
+
 // TestSecretRmRemovesSecret proves "secret rm" deletes the whole
 // secret directory and reports it in a message that never holds the
 // value (there is nothing to hold: rm never decrypts).
