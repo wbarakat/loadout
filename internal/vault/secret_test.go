@@ -36,7 +36,7 @@ func deviceIdentityFor(t *testing.T, v *vault.Vault) *age.X25519Identity {
 func TestAddSecretWritesBothFiles(t *testing.T) {
 	v := newVault(t)
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "", "human", value); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,7 +65,7 @@ func TestAddSecretWritesBothFiles(t *testing.T) {
 func TestAddSecretValueAbsentFromDisk(t *testing.T) {
 	v := newVault(t)
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", value); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,7 +92,7 @@ func TestAddSecretValueAbsentFromDisk(t *testing.T) {
 func TestAddSecretZeroesCallerBuffer(t *testing.T) {
 	v := newVault(t)
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", value); err != nil {
 		t.Fatal(err)
 	}
 	for i, b := range value {
@@ -109,7 +109,7 @@ func TestAddSecretZeroesCallerBuffer(t *testing.T) {
 func TestAddSecretValueDecryptsWithDeviceKey(t *testing.T) {
 	v := newVault(t)
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", value); err != nil {
 		t.Fatal(err)
 	}
 
@@ -153,7 +153,7 @@ func TestAddSecretEncryptsToEveryRosterRecipient(t *testing.T) {
 	}
 
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", value); err != nil {
 		t.Fatal(err)
 	}
 
@@ -191,7 +191,7 @@ func TestAddSecretAlwaysIncludesSelfEvenWhenNotEnrolled(t *testing.T) {
 	}
 
 	value := []byte(dummySecretValue)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", value); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", value); err != nil {
 		t.Fatal(err)
 	}
 
@@ -215,17 +215,17 @@ func TestAddSecretAlwaysIncludesSelfEvenWhenNotEnrolled(t *testing.T) {
 
 func TestAddSecretDuplicateRefused(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", []byte(dummySecretValue)); err == nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err == nil {
 		t.Fatal("a duplicate secret name must be refused")
 	}
 }
 
 func TestAddSecretBadNameRefused(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "Bad Name", "openai", "", "human", []byte(dummySecretValue)); err == nil {
+	if err := vault.AddSecret(v, "Bad Name", "openai", "", "", "human", []byte(dummySecretValue)); err == nil {
 		t.Fatal("a non-kebab-case name must be refused")
 	}
 	if vault.SecretExists(v, "Bad Name") {
@@ -235,10 +235,10 @@ func TestAddSecretBadNameRefused(t *testing.T) {
 
 func TestListSecretsMetadataOnly(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "zebra-key", "svc-z", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "zebra-key", "svc-z", "", "", "human", []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.AddSecret(v, "alpha-key", "svc-a", "", "claude-code", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "alpha-key", "svc-a", "", "", "claude-code", []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -304,7 +304,7 @@ func TestAddSecretRecoversFromIncompleteDirectory(t *testing.T) {
 		t.Fatalf("ListSecrets must not surface an incomplete directory, got %v", secrets)
 	}
 
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
 		t.Fatalf("AddSecret must recover from a stale incomplete directory: %v", err)
 	}
 	if !vault.SecretExists(v, "openai-key") {
@@ -360,7 +360,7 @@ func TestListSecretsSkipsTempDirectories(t *testing.T) {
 // device.key.
 func TestAddSecretValueFileMode0600(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
@@ -377,7 +377,7 @@ func TestSecretExists(t *testing.T) {
 	if vault.SecretExists(v, "openai-key") {
 		t.Fatal("SecretExists must be false before AddSecret")
 	}
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	if !vault.SecretExists(v, "openai-key") {
@@ -387,7 +387,7 @@ func TestSecretExists(t *testing.T) {
 
 func TestRemoveSecretDeletesDir(t *testing.T) {
 	v := newVault(t)
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	if err := vault.RemoveSecret(v, "openai-key"); err != nil {
@@ -425,7 +425,7 @@ func TestSecretsAreTrackedAccessLogIsGitignored(t *testing.T) {
 		t.Fatalf("access.log must be gitignored, got:\n%s", gitignore)
 	}
 
-	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", []byte(dummySecretValue)); err != nil {
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(v.Root, "access.log"), []byte(`{"secret":"openai-key"}`+"\n"), 0o600); err != nil {

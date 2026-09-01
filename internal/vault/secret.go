@@ -98,10 +98,12 @@ func renderSecretMeta(name, service, hook, rotateAfter, by, at string) string {
 
 // AddSecret creates a new secret: meta.md holds its plaintext
 // metadata, value.age holds value age-encrypted to the device roster
-// plus this device. by names who is writing it, for example "human"
-// or "claude-code". value is zeroed before AddSecret returns, on
-// every path, so the caller's own buffer stops holding the plaintext
-// as soon as this call is done with it.
+// plus this device. rotateAfter is an optional duration string (for
+// example "720h"), stored as-is in meta.md; empty means no rotation
+// reminder. by names who is writing it, for example "human" or
+// "claude-code". value is zeroed before AddSecret returns, on every
+// path, so the caller's own buffer stops holding the plaintext as
+// soon as this call is done with it.
 //
 // AddSecret writes meta.md and value.age into a temp directory next
 // to secrets/<name>, then renames that temp directory into place in
@@ -111,7 +113,7 @@ func renderSecretMeta(name, service, hook, rotateAfter, by, at string) string {
 //
 // INVARIANT 10: value never appears anywhere on disk except as
 // ciphertext inside value.age, and never in an error message.
-func AddSecret(v *Vault, name, service, hook, by string, value []byte) error {
+func AddSecret(v *Vault, name, service, hook, rotateAfter, by string, value []byte) error {
 	defer func() {
 		for i := range value {
 			value[i] = 0
@@ -161,7 +163,7 @@ func AddSecret(v *Vault, name, service, hook, by string, value []byte) error {
 	defer os.RemoveAll(tmpDir) // no-op once the rename below succeeds
 
 	at := time.Now().UTC().Format(time.RFC3339)
-	meta := renderSecretMeta(name, service, hook, "", by, at)
+	meta := renderSecretMeta(name, service, hook, rotateAfter, by, at)
 	if err := os.WriteFile(filepath.Join(tmpDir, "meta.md"), []byte(meta), 0o644); err != nil {
 		return err
 	}
@@ -230,4 +232,37 @@ func RemoveSecret(v *Vault, name string) error {
 		return fmt.Errorf("secret/%s: no such item. Fix: run loadout secret list.", name)
 	}
 	return os.RemoveAll(secretDir(v, name))
+}
+
+// DecryptSecret reads secret/<name>'s value.age and decrypts it with
+// this device's own age identity. The caller owns the returned
+// plaintext: it must zero the slice once it is done with it, the same
+// way AddSecret's own caller must zero the value it hands in.
+//
+// INVARIANT 10: the plaintext never appears in an error. A missing
+// secret and an undecryptable one each get a fixed message that names
+// only the secret, never the value — there is no value to name yet in
+// either case.
+func DecryptSecret(v *Vault, name string) ([]byte, error) {
+	if !SecretExists(v, name) {
+		return nil, fmt.Errorf("secret/%s: no such secret. Fix: run loadout secret list.", name)
+	}
+	ciphertext, err := os.ReadFile(secretValuePath(v, name))
+	if err != nil {
+		return nil, err
+	}
+	identity, err := deviceKey(v)
+	if err != nil {
+		return nil, err
+	}
+	cannotReadErr := fmt.Errorf("secret/%s: this device cannot read the secret. Fix: approve this device, then sync, so the secret re-encrypts to it.", name)
+	r, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
+	if err != nil {
+		return nil, cannotReadErr
+	}
+	var plaintext bytes.Buffer
+	if _, err := plaintext.ReadFrom(r); err != nil {
+		return nil, cannotReadErr
+	}
+	return plaintext.Bytes(), nil
 }

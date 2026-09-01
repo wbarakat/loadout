@@ -33,6 +33,12 @@ commands:
   review                     list draft items awaiting review
   review keep KIND/NAME      mark a draft item kept
   review drop KIND/NAME      delete a draft item
+  secret add NAME --service SVC [--hook TEXT] [--rotate-after DUR] [--by WHO]
+                             add a secret; the value is piped on stdin
+  secret list [--json]       show every secret's metadata, never its value
+  secret show NAME [--reveal] [--by WHO]
+                             refuse by default; print the value only with --reveal
+  secret rm NAME             remove a secret
   help                       show this message
 
 flags:
@@ -124,6 +130,8 @@ func Run(out, errOut io.Writer, args []string) int {
 		return cmdUndo(out, errOut, m)
 	case "review":
 		return cmdReview(out, errOut, args[1:], m)
+	case "secret":
+		return cmdSecret(out, errOut, args[1:], m)
 	default:
 		fmt.Fprintf(errOut, "unknown command %q\n%s", args[0], usage)
 		return 2

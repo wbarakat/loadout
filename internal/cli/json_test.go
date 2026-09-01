@@ -15,7 +15,7 @@ func TestHelpExitsZeroAndShowsEveryVerb(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("%v: want exit 0, got %d (err %q)", args, code, errOut)
 		}
-		for _, verb := range []string{"init", "add", "show", "list", "edit", "recall", "context", "device", "sync", "status", "doctor", "log", "undo", "review"} {
+		for _, verb := range []string{"init", "add", "show", "list", "edit", "recall", "context", "device", "sync", "status", "doctor", "log", "undo", "review", "secret"} {
 			if !strings.Contains(out, verb) {
 				t.Fatalf("%v: usage must mention %q, got %q", args, verb, out)
 			}
