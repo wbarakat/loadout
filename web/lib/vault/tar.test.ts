@@ -25,6 +25,10 @@ interface RawEntrySpec {
   body?: Uint8Array;
   /** The ustar "prefix" field (155 bytes), for names over 100 bytes. */
   prefix?: string;
+  /** Override the header's declared "size" field to something other than
+   * `body`'s actual length — used to build a malformed archive whose
+   * header claims more bytes than the stream actually holds. */
+  declaredSize?: number;
 }
 
 function octalField(value: number, width: number): Uint8Array {
@@ -89,7 +93,8 @@ function buildTar(specs: RawEntrySpec[]): Uint8Array {
   for (const spec of specs) {
     const isDir = spec.typeflag === "5";
     const body = isDir ? new Uint8Array(0) : (spec.body ?? new Uint8Array(0));
-    chunks.push(buildHeader(spec, body.length));
+    const declaredSize = spec.declaredSize ?? body.length;
+    chunks.push(buildHeader(spec, declaredSize));
     if (body.length > 0) {
       chunks.push(padTo512(body));
     }
@@ -214,5 +219,18 @@ describe("readTar", () => {
     const entries = readTar(tar);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.name).toBe("memory/y.md");
+  });
+
+  it("throws UnsafeEntryError when a declared size exceeds the remaining archive bytes, rather than silently truncating", () => {
+    const tar = buildTar([
+      {
+        name: "memory/y.md",
+        typeflag: "0",
+        body: new TextEncoder().encode("only a few bytes"),
+        declaredSize: 5000,
+      },
+    ]);
+    expect(() => readTar(tar)).toThrow(UnsafeEntryError);
+    expect(() => readTar(tar)).toThrow(/size/i);
   });
 });

@@ -160,6 +160,16 @@ export function readTar(tar: Uint8Array): TarEntry[] {
     const size = parseOctalField(
       header.subarray(SIZE_OFFSET, SIZE_OFFSET + SIZE_SIZE),
     );
+    if (offset + size > tar.length) {
+      // A declared size that runs past the end of the archive must not be
+      // silently truncated into a short entry, and must not silently
+      // swallow the header/body bytes of any entry that would have
+      // followed. Treat this as a hard read failure, the same as an
+      // unsafe name or type.
+      throw new UnsafeEntryError(
+        "declared entry size exceeds the remaining archive bytes",
+      );
+    }
     const bodyBlockCount = Math.ceil(size / BLOCK_SIZE);
     const body = tar.subarray(offset, offset + size);
     offset += bodyBlockCount * BLOCK_SIZE;
