@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"filippo.io/age"
@@ -43,10 +44,16 @@ func secretValuePath(v *Vault, name string) string {
 	return filepath.Join(secretDir(v, name), "value.age")
 }
 
-// SecretExists reports whether a secret named name has metadata on
-// disk.
+// SecretExists reports whether a secret named name has BOTH its
+// metadata and its encrypted value on disk. A directory holding only
+// one of the two — debris from a write AddSecret never finished, or a
+// hand-edited vault — does not count as a real secret: AddSecret
+// treats it as absent and safe to replace.
 func SecretExists(v *Vault, name string) bool {
-	_, err := os.Stat(secretMetaPath(v, name))
+	if _, err := os.Stat(secretMetaPath(v, name)); err != nil {
+		return false
+	}
+	_, err := os.Stat(secretValuePath(v, name))
 	return err == nil
 }
 
@@ -96,6 +103,12 @@ func renderSecretMeta(name, service, hook, rotateAfter, by, at string) string {
 // every path, so the caller's own buffer stops holding the plaintext
 // as soon as this call is done with it.
 //
+// AddSecret writes meta.md and value.age into a temp directory next
+// to secrets/<name>, then renames that temp directory into place in
+// one step. This makes the pair atomic as a unit: a crash mid-write
+// leaves only an orphaned temp directory behind, never a half-written
+// secrets/<name> that SecretExists would wrongly treat as real.
+//
 // INVARIANT 10: value never appears anywhere on disk except as
 // ciphertext inside value.age, and never in an error message.
 func AddSecret(v *Vault, name, service, hook, by string, value []byte) error {
@@ -111,6 +124,13 @@ func AddSecret(v *Vault, name, service, hook, by string, value []byte) error {
 	if SecretExists(v, name) {
 		return fmt.Errorf("the secret %s already exists. Fix: choose another name, or rotate the existing secret.", name)
 	}
+	// A directory may already sit at secretDir(v, name) without
+	// counting as a real secret (SecretExists just said so): debris
+	// from an interrupted write, or a hand-edited vault. Clear it so
+	// the rename below lands cleanly.
+	if err := os.RemoveAll(secretDir(v, name)); err != nil {
+		return err
+	}
 
 	recipients, err := secretRecipients(v)
 	if err != nil {
@@ -121,6 +141,9 @@ func AddSecret(v *Vault, name, service, hook, by string, value []byte) error {
 	if err != nil {
 		return fmt.Errorf("the secret %s cannot be encrypted: %v", name, err)
 	}
+	// age buffers plaintext chunks inside its own STREAM writer while
+	// it encrypts. This code cannot reach or zero that buffer: it is a
+	// known, accepted, library-level exposure window.
 	if _, err := w.Write(value); err != nil {
 		return fmt.Errorf("the secret %s cannot be encrypted: %v", name, err)
 	}
@@ -128,15 +151,26 @@ func AddSecret(v *Vault, name, service, hook, by string, value []byte) error {
 		return fmt.Errorf("the secret %s cannot be encrypted: %v", name, err)
 	}
 
-	if err := os.MkdirAll(secretDir(v, name), 0o755); err != nil {
+	if err := os.MkdirAll(v.SecretsDir(), 0o755); err != nil {
 		return err
 	}
+	tmpDir, err := os.MkdirTemp(v.SecretsDir(), "."+name+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir) // no-op once the rename below succeeds
+
 	at := time.Now().UTC().Format(time.RFC3339)
 	meta := renderSecretMeta(name, service, hook, "", by, at)
-	if err := writeFileAtomicVault(secretMetaPath(v, name), []byte(meta)); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, "meta.md"), []byte(meta), 0o644); err != nil {
 		return err
 	}
-	return writeFileAtomicVault(secretValuePath(v, name), buf.Bytes())
+	// value.age holds the encrypted key material: mode 0600, matching
+	// device.key's own sensitivity.
+	if err := os.WriteFile(filepath.Join(tmpDir, "value.age"), buf.Bytes(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpDir, secretDir(v, name))
 }
 
 // ListSecrets reads every secret's metadata, in name order. It never
@@ -152,7 +186,15 @@ func ListSecrets(v *Vault) ([]Secret, error) {
 	}
 	var secrets []Secret
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			// A dot-prefixed entry is an AddSecret temp directory: one
+			// that never got renamed into place, orphaned by a crash
+			// between its own write and the final rename.
+			continue
+		}
+		if !SecretExists(v, e.Name()) {
+			// Debris: a directory missing meta.md or value.age is not
+			// a complete secret. AddSecret treats it the same way.
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(v.SecretsDir(), e.Name(), "meta.md"))

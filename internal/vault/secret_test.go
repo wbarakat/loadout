@@ -277,6 +277,101 @@ func TestListSecretsOnEmptyVault(t *testing.T) {
 	}
 }
 
+// TestAddSecretRecoversFromIncompleteDirectory proves a stale,
+// half-written secret directory — meta.md present, value.age never
+// written, the exact shape a crash between the old two-step write
+// left behind — does not strand the name forever. SecretExists and
+// ListSecrets both treat it as absent, and a retry succeeds and
+// produces a real, decryptable secret.
+func TestAddSecretRecoversFromIncompleteDirectory(t *testing.T) {
+	v := newVault(t)
+	dir := filepath.Join(v.SecretsDir(), "openai-key")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.md"), []byte("---\nname: openai-key\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if vault.SecretExists(v, "openai-key") {
+		t.Fatal("a directory missing value.age must not count as an existing secret")
+	}
+	secrets, err := vault.ListSecrets(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 0 {
+		t.Fatalf("ListSecrets must not surface an incomplete directory, got %v", secrets)
+	}
+
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", []byte(dummySecretValue)); err != nil {
+		t.Fatalf("AddSecret must recover from a stale incomplete directory: %v", err)
+	}
+	if !vault.SecretExists(v, "openai-key") {
+		t.Fatal("the secret must exist after a successful retry")
+	}
+
+	ciphertext, err := os.ReadFile(filepath.Join(dir, "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := deviceIdentityFor(t, v)
+	r, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
+	if err != nil {
+		t.Fatalf("value.age must decrypt after the recovered write: %v", err)
+	}
+	var plaintext bytes.Buffer
+	if _, err := plaintext.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	if plaintext.String() != dummySecretValue {
+		t.Fatalf("decrypted value = %q, want %q", plaintext.String(), dummySecretValue)
+	}
+}
+
+// TestListSecretsSkipsTempDirectories proves a leftover AddSecret temp
+// directory — the shape a crash right before the final rename leaves
+// behind, with both files already written under its dot-prefixed temp
+// name — never surfaces as a secret.
+func TestListSecretsSkipsTempDirectories(t *testing.T) {
+	v := newVault(t)
+	tmpDir := filepath.Join(v.SecretsDir(), ".openai-key.tmp-stale")
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "meta.md"), []byte("---\nname: openai-key\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "value.age"), []byte("bogus-ciphertext"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	secrets, err := vault.ListSecrets(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 0 {
+		t.Fatalf("ListSecrets must skip a dot-prefixed temp directory, got %v", secrets)
+	}
+}
+
+// TestAddSecretValueFileMode0600 proves value.age is written mode
+// 0600: it holds encrypted key material, the same sensitivity as
+// device.key.
+func TestAddSecretValueFileMode0600(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "human", []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("value.age must be mode 0600, got %o", fi.Mode().Perm())
+	}
+}
+
 func TestSecretExists(t *testing.T) {
 	v := newVault(t)
 	if vault.SecretExists(v, "openai-key") {
