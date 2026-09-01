@@ -183,6 +183,8 @@ The encrypted secret store as `secret/*` items, env injection, access logs, rota
 **Phase 6 — MCP endpoint.**
 Serve `context`, `recall`, and brokered secret use over MCP. Success: an agent recalls a fact and calls an API without ever holding the key.
 
+The MCP server (`loadout mcp`) speaks JSON-RPC over stdio — an agent tool spawns it as a local MCP server; no port, no network listener, device-local. It is a stdlib implementation (the MCP protocol surface is small: initialize, tools/list, tools/call); Loadout adds no MCP SDK dependency. It exposes a read surface (context, recall, show, list, list_secrets — metadata only) and one brokered tool, `http_request`: the agent gives a method, URL, headers, and body with a `{{secret:<name>}}` placeholder; the server substitutes the named secret server-side, sends the request, and returns only the response — the agent never sees the key. The broker's safety rule: each secret declares `allowed_hosts` (a metadata list); the broker refuses to send a secret to any host not on its list, which stops an agent from exfiltrating a key by pointing the request at an attacker's host. Every brokered use appends to the access log (secret, host, time — never the value).
+
 **Phase 7 — Connectors for hosted agents.**
 Push items to hosted agents such as Devin over their APIs. Success: a vault edit reaches a hosted agent with no manual step.
 
