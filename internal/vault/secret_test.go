@@ -889,6 +889,37 @@ func TestValidateSecretNameGrammar(t *testing.T) {
 	}
 }
 
+// TestDecryptSecretWrapsUnreadableValueFileError proves a raw
+// os.ReadFile failure on value.age (SecretExists already passed, so
+// the file exists, but reading it fails anyway) is wrapped in the
+// standard grammar, never surfaced as a bare, unwrapped os error.
+func TestDecryptSecretWrapsUnreadableValueFileError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a file regardless of its permissions")
+	}
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	valuePath := filepath.Join(v.SecretsDir(), "openai-key", "value.age")
+	if err := os.Chmod(valuePath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(valuePath, 0o600)
+
+	_, err := vault.DecryptSecret(v, "openai-key")
+	if err == nil {
+		t.Fatal("DecryptSecret must fail when value.age cannot be read")
+	}
+	want := "secret/openai-key: the secret value cannot be read:"
+	if !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("bad error: got %q, want prefix %q", err.Error(), want)
+	}
+	if !strings.HasSuffix(err.Error(), "Fix: check the file, or re-add the secret.") {
+		t.Fatalf("bad error: %q", err.Error())
+	}
+}
+
 // TestReEncryptSecretsOnEmptyVault proves a vault with no secrets at
 // all is a no-op: no error, no skipped names.
 func TestReEncryptSecretsOnEmptyVault(t *testing.T) {

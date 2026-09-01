@@ -22,7 +22,7 @@ const runUsage = `usage: loadout run --secret <name>[=ENVVAR] [--secret <name2>.
 // runJSONError is what "loadout run --json" prints: run is a
 // transparent wrapper around a child process, so it has nothing of
 // its own to marshal as JSON, matching cmdEdit's own refusal.
-const runJSONError = "run has no json output. Fix: run run without --json."
+const runJSONError = "run has no json output. Fix: run the command without --json."
 
 // envVarPattern is what an explicit "--secret name=ENVVAR" form's
 // ENVVAR half must match: a valid POSIX environment variable name.
@@ -30,10 +30,14 @@ var envVarPattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // runSecretSpec is one parsed "--secret name[=ENVVAR]" flag. envVar
 // is empty until resolveEnvVars fills it in with either the given
-// name or one derived from the secret's own name.
+// name or one derived from the secret's own name. hasEnvVar records
+// whether "=" was given at all, so resolveEnvVars can tell "no =" (an
+// empty envVar that just means "derive the default") apart from an
+// explicit "=" with nothing after it (a usage error).
 type runSecretSpec struct {
-	name   string
-	envVar string
+	name      string
+	envVar    string
+	hasEnvVar bool
 }
 
 // runArgs is the parsed shape of "run --secret <name>[=ENVVAR]...
@@ -80,7 +84,7 @@ func parseRunArgs(args []string) (runArgs, bool) {
 			if name == "" {
 				return runArgs{}, false
 			}
-			spec := runSecretSpec{name: name}
+			spec := runSecretSpec{name: name, hasEnvVar: hasEnvVar}
 			if hasEnvVar {
 				spec.envVar = envVar
 			}
@@ -107,14 +111,21 @@ func deriveEnvName(name string) string {
 
 // resolveEnvVars fills in envVar on every spec: the explicit ENVVAR
 // half of "name=ENVVAR" when given, checked against envVarPattern, or
-// else deriveEnvName's own reading of the secret's name. It returns
-// an error naming the bad ENVVAR when one fails that check, so the
-// caller can report a usage error before any secret is decrypted.
+// else deriveEnvName's own reading of the secret's name when "="  was
+// omitted entirely. An explicit "=" with nothing after it is a
+// different case from omitting "=": the caller asked for a specific
+// env var name and gave none, so that is a usage error, not a request
+// to derive the default. It returns an error naming the problem when
+// either check fails, so the caller can report a usage error before
+// any secret is decrypted.
 func resolveEnvVars(secrets []runSecretSpec) error {
 	for i, spec := range secrets {
-		if spec.envVar == "" {
+		if !spec.hasEnvVar {
 			secrets[i].envVar = deriveEnvName(spec.name)
 			continue
+		}
+		if spec.envVar == "" {
+			return fmt.Errorf("--secret %s=%s: the env var name after = is empty. Fix: give a name like OPENAI_KEY, or omit =NAME to derive it.", spec.name, spec.envVar)
 		}
 		if !envVarPattern.MatchString(spec.envVar) {
 			return fmt.Errorf("%s: not a valid environment variable name. Fix: use a name matching ^[A-Z_][A-Z0-9_]*$.", spec.envVar)

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,6 +109,103 @@ func TestSecretAddRefusesTTYStdin(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(base, "vault", "secrets", "my-key")); !os.IsNotExist(err) {
 		t.Fatal("a TTY refusal must never create a secret")
+	}
+}
+
+// captureReadStdin substitutes readStdin with one that still reads
+// normally but also stores the exact slice it returned into captured,
+// so a test can inspect that slice after the command under test
+// returns — the only way to see a byte slice that never leaves
+// cmdSecretAdd/cmdSecretRotate any other way. It restores readStdin
+// via t.Cleanup.
+func captureReadStdin(t *testing.T) (captured *[]byte) {
+	t.Helper()
+	var buf []byte
+	orig := readStdin
+	readStdin = func(r io.Reader) ([]byte, error) {
+		b, err := orig(r)
+		buf = b
+		return b, err
+	}
+	t.Cleanup(func() { readStdin = orig })
+	return &buf
+}
+
+// pipeValue replaces os.Stdin with a pipe carrying value, restoring
+// the real os.Stdin via t.Cleanup.
+func pipeValue(t *testing.T, value string) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = orig; r.Close() })
+	go func() {
+		io.WriteString(w, value)
+		w.Close()
+	}()
+}
+
+// TestSecretAddZeroesStdinOnEarlyVaultOpenFailure proves the Commit-2
+// hardening: cmdSecretAdd zeroes the stdin plaintext even when
+// vault.Open fails AFTER it was read — before AddSecret ever runs to
+// zero its own copy. LOADOUT_HOME here points at a directory nothing
+// has run "loadout init" on, so vault.Open fails immediately, with no
+// lock-retry delay.
+func TestSecretAddZeroesStdinOnEarlyVaultOpenFailure(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("HOME", filepath.Join(base, "home"))
+	t.Setenv("LOADOUT_HOME", filepath.Join(base, "vault")) // never initialized
+	if err := os.MkdirAll(filepath.Join(base, "home"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	captured := captureReadStdin(t)
+	pipeValue(t, "do-not-leak-this-value")
+
+	var out, errOut bytes.Buffer
+	code := cmdSecretAdd(&out, &errOut, []string{"my-key", "--service", "svc"}, modeText)
+	if code != 1 {
+		t.Fatalf("want exit 1 (vault.Open must fail against an uninitialized vault), got %d (%s)", code, errOut.String())
+	}
+	if *captured == nil {
+		t.Fatal("the test hook never captured the stdin read")
+	}
+	for i, b := range *captured {
+		if b != 0 {
+			t.Fatalf("captured[%d] = %d, want 0: cmdSecretAdd must zero the stdin plaintext even when vault.Open fails", i, b)
+		}
+	}
+}
+
+// TestSecretRotateZeroesStdinOnEarlyVaultOpenFailure is
+// TestSecretAddZeroesStdinOnEarlyVaultOpenFailure's counterpart for
+// cmdSecretRotate.
+func TestSecretRotateZeroesStdinOnEarlyVaultOpenFailure(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("HOME", filepath.Join(base, "home"))
+	t.Setenv("LOADOUT_HOME", filepath.Join(base, "vault")) // never initialized
+	if err := os.MkdirAll(filepath.Join(base, "home"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	captured := captureReadStdin(t)
+	pipeValue(t, "do-not-leak-this-rotated-value")
+
+	var out, errOut bytes.Buffer
+	code := cmdSecretRotate(&out, &errOut, []string{"my-key"}, modeText)
+	if code != 1 {
+		t.Fatalf("want exit 1 (vault.Open must fail against an uninitialized vault), got %d (%s)", code, errOut.String())
+	}
+	if *captured == nil {
+		t.Fatal("the test hook never captured the stdin read")
+	}
+	for i, b := range *captured {
+		if b != 0 {
+			t.Fatalf("captured[%d] = %d, want 0: cmdSecretRotate must zero the stdin plaintext even when vault.Open fails", i, b)
+		}
 	}
 }
 

@@ -44,6 +44,8 @@ The kinds:
 - **Memory** (`memory/*`): one markdown fact with frontmatter.
 - **Secret** (`secret/*`, Phase 5): a plaintext metadata file (name, service, hook, optional `rotate_after`; never the value) plus a sibling `.age` file holding the value, encrypted to every enrolled device recipient. Agents use a secret without reading it: `loadout run -- <cmd>` injects chosen secrets as environment variables into a child process, and the value never touches disk or agent context. `loadout secret show` reveals a value on stdout only under an explicit flag. Every decrypt appends to a local access log (device, tool, time, secret name — never the value). Approving a device re-encrypts the secret files to the newcomer.
 
+**Secret sync caveats (Phase 5).** Two devices can rotate the same secret at the same time. Sync resolves this as last-writer-wins. One rotation is lost. Re-do the lost rotation by hand. A device can hold a secret it cannot decrypt — an orphan secret. Re-encrypt skips an orphan secret. It does not revoke that secret's old recipients. Run `loadout doctor` to find an orphan secret.
+
 Around the items:
 
 - **Vault**: the local directory that holds all items, one manifest, one lock, and a git-backed history. It is the source of truth on each device.
@@ -157,6 +159,7 @@ Components, each with one purpose:
 - **v1 trust boundary (self-host).** A snapshot is encrypted. A snapshot is not signed. Any device with the bearer token can read the enrolled recipients from `GET /v1/devices`. That device can encrypt a new snapshot to those recipients and push it. Enrolled devices merge the snapshot. They do not check its real author.
 - This includes the operator of a self-hosted server. In self-host v1, the token holder is trusted as the vault owner.
 - The hosted service (decision 12) must add per-device snapshot signing before it ships. It must reject a merge when the snapshot's signer is not in `devices.toml`. This is a wire-protocol change, not a client-only fix.
+- **Known limitations, deferred to Phase 8.** (a) The access log is device-local. The Phase 8 dashboard decrypts a secret in the browser. The hosted service must log that access on the server. Without server-side logging, invariant 10's rule — every decrypt logs — does not hold for the dashboard. (b) Enrolling a browser as a device gives it every secret: it becomes a full recipient. This combines with the per-device snapshot signing gap above. The hosted service must add that signing before it ships.
 
 ## 12. Phases
 

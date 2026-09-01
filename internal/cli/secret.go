@@ -30,6 +30,14 @@ var stdinIsTTY = func() bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
+// readStdin reads all of stdin's bytes. It is a package variable, not
+// a plain call to io.ReadAll, so a test can capture the exact slice
+// cmdSecretAdd and cmdSecretRotate hand off to AddSecret/RotateSecret,
+// and prove it is zeroed on every return path — including one that
+// returns before AddSecret or RotateSecret ever runs to zero its own
+// copy.
+var readStdin = io.ReadAll
+
 // cmdSecret dispatches the four secret forms: add, list, show, rm.
 func cmdSecret(out, errOut io.Writer, args []string, m mode) int {
 	if len(args) == 0 {
@@ -148,12 +156,21 @@ func cmdSecretAdd(out, errOut io.Writer, args []string, m mode) int {
 		io.WriteString(errOut, pipeStdinMessage+"\n")
 		return 1
 	}
-	value, err := io.ReadAll(os.Stdin)
+	value, err := readStdin(os.Stdin)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
 	value = trimTrailingNewline(value)
+	// Zero the stdin plaintext on EVERY return from here on, including
+	// an early "vault.Open" or "vault.Lock" failure that happens
+	// before AddSecret ever runs (AddSecret zeroes its own copy, but
+	// only once it is actually called).
+	defer func() {
+		for i := range value {
+			value[i] = 0
+		}
+	}()
 
 	v, err := vault.Open(vault.DefaultRoot())
 	if err != nil {
@@ -390,12 +407,21 @@ func cmdSecretRotate(out, errOut io.Writer, args []string, m mode) int {
 		io.WriteString(errOut, pipeStdinMessage+"\n")
 		return 1
 	}
-	value, err := io.ReadAll(os.Stdin)
+	value, err := readStdin(os.Stdin)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
 	value = trimTrailingNewline(value)
+	// Zero the stdin plaintext on EVERY return from here on, including
+	// an early "vault.Open" or "vault.Lock" failure that happens
+	// before RotateSecret ever runs (RotateSecret zeroes its own copy,
+	// but only once it is actually called).
+	defer func() {
+		for i := range value {
+			value[i] = 0
+		}
+	}()
 
 	v, err := vault.Open(vault.DefaultRoot())
 	if err != nil {

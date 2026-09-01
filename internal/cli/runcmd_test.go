@@ -353,6 +353,45 @@ func TestRunRefusesPathTraversalSecretName(t *testing.T) {
 	assertSentinelSurvives(t, sentinel)
 }
 
+// TestRunSecretEqualsEmptyEnvVarIsUsageError proves an explicit but
+// empty "--secret name=" is a usage error distinct from omitting "="
+// entirely: the caller asked for a specific env var name and gave
+// none, so run must not silently fall back to the derived default.
+func TestRunSecretEqualsEmptyEnvVarIsUsageError(t *testing.T) {
+	base := setupEnv(t)
+	run(t, "init")
+	runWithStdin(t, dummySecretValue, "secret", "add", "test-key", "--service", "svc")
+
+	_, errOut, code := run(t, "run", "--secret", "test-key=", "--", "sh", "-c", "true")
+	if code != 2 {
+		t.Fatalf("want exit 2, got %d (%s)", code, errOut)
+	}
+	if !strings.Contains(errOut, "the env var name after = is empty") {
+		t.Fatalf("bad error: %q", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(base, "vault", "access.log")); !os.IsNotExist(err) {
+		t.Fatal("a usage error must never write the access log")
+	}
+}
+
+// TestRunJSONIsAPlainError pins the exact "run --json" refusal text.
+func TestRunJSONIsAPlainError(t *testing.T) {
+	setupEnv(t)
+	run(t, "init")
+
+	out, errOut, code := run(t, "run", "--json", "--secret", "test-key=FOO", "--", "true")
+	if code != 2 {
+		t.Fatalf("run --json must exit 2, got %d", code)
+	}
+	if out != "" {
+		t.Fatalf("run --json must print nothing to stdout, got %q", out)
+	}
+	want := "run has no json output. Fix: run the command without --json.\n"
+	if errOut != want {
+		t.Fatalf("bad error: got %q want %q", errOut, want)
+	}
+}
+
 // TestRunJSONFlagIsRejected proves --json before "--" is refused, and
 // TestRunJSONAfterSeparatorReachesTheChild proves the same token
 // after "--" is left alone: it belongs to the child, not to loadout.

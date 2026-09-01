@@ -315,7 +315,7 @@ func DecryptSecret(v *Vault, name string) ([]byte, error) {
 	}
 	ciphertext, err := os.ReadFile(secretValuePath(v, name))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("secret/%s: the secret value cannot be read: %v. Fix: check the file, or re-add the secret.", name, err)
 	}
 	identity, err := deviceKey(v)
 	if err != nil {
