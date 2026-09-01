@@ -15,12 +15,20 @@ const (
 	modeJSON
 )
 
-// extractJSON removes the first "--json" argument found at any
-// position in args, and reports whether it found one. Run calls this
-// before it dispatches to a verb, so no verb ever sees a "--json"
-// token mixed in with its own arguments.
+// extractJSON removes the first "--json" argument found before a
+// literal "--" separator, and reports whether it found one. Run calls
+// this before it dispatches to a verb, so no verb ever sees a
+// "--json" token mixed in with its own arguments. The scan stops at
+// "--" rather than running to the end of args: "loadout run" takes
+// everything after "--" as its child command's own argv, and a
+// "--json" the child was going to see (for example "loadout run
+// --secret x -- mytool --json") must reach that child untouched, not
+// get stripped out by loadout itself.
 func extractJSON(args []string) ([]string, bool) {
 	for i, a := range args {
+		if a == "--" {
+			break
+		}
 		if a == "--json" {
 			out := make([]string, 0, len(args)-1)
 			out = append(out, args[:i]...)

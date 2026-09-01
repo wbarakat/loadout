@@ -39,6 +39,9 @@ commands:
   secret show NAME [--reveal] [--by WHO]
                              refuse by default; print the value only with --reveal
   secret rm NAME             remove a secret
+  run --secret NAME[=ENVVAR] [--secret NAME2...] [--by WHO] -- CMD [args...]
+                             decrypt secrets, inject them into a child process's
+                             environment, exec it, and exit with its exit code
   help                       show this message
 
 flags:
@@ -132,6 +135,8 @@ func Run(out, errOut io.Writer, args []string) int {
 		return cmdReview(out, errOut, args[1:], m)
 	case "secret":
 		return cmdSecret(out, errOut, args[1:], m)
+	case "run":
+		return cmdRun(out, errOut, args[1:], m)
 	default:
 		fmt.Fprintf(errOut, "unknown command %q\n%s", args[0], usage)
 		return 2
