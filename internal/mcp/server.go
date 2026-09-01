@@ -92,9 +92,9 @@ type Tool struct {
 	Handler     func(args json.RawMessage) (ToolResult, error)
 }
 
-// Registry holds the tools one MCP server exposes. Tasks 2 and 3
-// register the vault's read tools and the secret broker into it
-// through registerTools below; this task leaves it empty.
+// Registry holds the tools one MCP server exposes. registerTools
+// registers the vault's read tools (Task 2) and, in Task 3, the
+// secret broker.
 type Registry struct {
 	tools []Tool
 }
@@ -120,11 +120,12 @@ func (r *Registry) find(name string) (Tool, bool) {
 	return Tool{}, false
 }
 
-// registerTools adds every tool this server exposes to reg. Task 1
-// leaves it empty; Tasks 2 and 3 extend it with the vault's read
-// tools and the secret broker, using v to reach the vault's data.
+// registerTools adds every tool this server exposes to reg: the
+// five read tools (context, recall, show, list, list_secrets) from
+// registerReadTools, and, in Task 3, the secret broker — using v to
+// reach the vault's data.
 func registerTools(reg *Registry, v *vault.Vault) {
-	_ = v
+	registerReadTools(reg, v)
 }
 
 // Serve runs the MCP JSON-RPC loop: it reads newline-delimited JSON

@@ -120,7 +120,10 @@ func TestServeInitialize(t *testing.T) {
 	}
 }
 
-func TestServeToolsListIsEmpty(t *testing.T) {
+// TestServeToolsListAdvertisesReadTools proves tools/list reports the
+// five read tools Task 2 registers, each with a non-empty
+// description and a type:object InputSchema.
+func TestServeToolsListAdvertisesReadTools(t *testing.T) {
 	v := testVault(t)
 	msgs, err := serve(t, v, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	if err != nil {
@@ -130,16 +133,39 @@ func TestServeToolsListIsEmpty(t *testing.T) {
 		t.Fatalf("want 1 response, got %d", len(msgs))
 	}
 	var result struct {
-		Tools []json.RawMessage `json:"tools"`
+		Tools []struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			InputSchema json.RawMessage `json:"inputSchema"`
+		} `json:"tools"`
 	}
 	if err := json.Unmarshal(msgs[0].Result, &result); err != nil {
 		t.Fatalf("tools/list result did not parse: %v", err)
 	}
-	if result.Tools == nil {
-		t.Fatalf("want tools:[], got tools:null")
+	want := []string{"context", "recall", "show", "list", "list_secrets"}
+	if len(result.Tools) != len(want) {
+		t.Fatalf("want %d tools, got %d: %+v", len(want), len(result.Tools), result.Tools)
 	}
-	if len(result.Tools) != 0 {
-		t.Fatalf("want an empty tool list, got %d tools", len(result.Tools))
+	got := make(map[string]bool)
+	for _, tool := range result.Tools {
+		got[tool.Name] = true
+		if tool.Description == "" {
+			t.Fatalf("tool %s has no description", tool.Name)
+		}
+		var schema struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+			t.Fatalf("tool %s inputSchema did not parse: %v", tool.Name, err)
+		}
+		if schema.Type != "object" {
+			t.Fatalf("tool %s inputSchema.type must be object, got %q", tool.Name, schema.Type)
+		}
+	}
+	for _, name := range want {
+		if !got[name] {
+			t.Fatalf("tools/list missing %q, got %+v", name, result.Tools)
+		}
 	}
 }
 

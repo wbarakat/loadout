@@ -7,13 +7,10 @@ import (
 	"loadout.dev/loadout/internal/vault"
 )
 
-// recentHistoryCount is how many history subjects the "recent"
-// section of "loadout context" shows.
+// recentHistoryCount is how many history subjects the JSON shape of
+// "loadout context" reports under "recent". The text shape uses the
+// same count through vault.RenderContext.
 const recentHistoryCount = 3
-
-// nextLine is the final line of "loadout context": a pointer to the
-// two commands that dig into what context shows.
-const nextLine = "next: loadout show <kind/name> reads one item; loadout recall <terms> searches."
 
 // contextItem is one fact or skill entry in the JSON shape of
 // "loadout context". Address is "<kind>/<name>", the same shape
@@ -44,23 +41,23 @@ func cmdContext(out, errOut io.Writer, m mode) int {
 		return 1
 	}
 	printWarnings(errOut, v)
-	skills, err := vault.ListSkills(v)
-	if err != nil {
-		fmt.Fprintln(errOut, err)
-		return 1
-	}
-	facts, err := vault.ListFacts(v)
-	if err != nil {
-		fmt.Fprintln(errOut, err)
-		return 1
-	}
-	subjects, err := vault.RecentSubjects(v, recentHistoryCount)
-	if err != nil {
-		fmt.Fprintln(errOut, err)
-		return 1
-	}
 
 	if m == modeJSON {
+		skills, err := vault.ListSkills(v)
+		if err != nil {
+			fmt.Fprintln(errOut, err)
+			return 1
+		}
+		facts, err := vault.ListFacts(v)
+		if err != nil {
+			fmt.Fprintln(errOut, err)
+			return 1
+		}
+		subjects, err := vault.RecentSubjects(v, recentHistoryCount)
+		if err != nil {
+			fmt.Fprintln(errOut, err)
+			return 1
+		}
 		memory := make([]contextItem, 0, len(facts))
 		for _, f := range facts {
 			memory = append(memory, contextItem{Address: "memory/" + f.Name, Hook: f.Description})
@@ -82,32 +79,11 @@ func cmdContext(out, errOut io.Writer, m mode) int {
 		return 0
 	}
 
-	fmt.Fprintf(out, "vault: %s (%d skills, %d facts)\n", v.Root, len(skills), len(facts))
-
-	fmt.Fprintln(out, "memory:")
-	for _, f := range facts {
-		fmt.Fprintf(out, "  %s\n", hookLine(f.Name, f.Description))
+	text, err := vault.RenderContext(v)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
 	}
-
-	fmt.Fprintln(out, "skills:")
-	for _, s := range skills {
-		fmt.Fprintf(out, "  %s\n", hookLine(s.Name, s.Description))
-	}
-
-	fmt.Fprintln(out, "recent:")
-	for _, subject := range subjects {
-		fmt.Fprintf(out, "  %s\n", subject)
-	}
-
-	fmt.Fprintln(out, nextLine)
+	fmt.Fprint(out, text)
 	return 0
-}
-
-// hookLine renders "<name> — <hook>", with the same "(no
-// description)" placeholder "loadout list" uses for a blank hook.
-func hookLine(name, hook string) string {
-	if hook == "" {
-		hook = "(no description)"
-	}
-	return name + " — " + hook
 }

@@ -3,15 +3,9 @@ package cli
 import (
 	"fmt"
 	"io"
-	"sort"
 
 	"loadout.dev/loadout/internal/vault"
 )
-
-// listItem is one line of "loadout list" output.
-type listItem struct {
-	kind, name, hook string
-}
 
 // jsonItem is one entry in the JSON shape of "loadout list" and
 // "loadout recall": {items: [{address, hook}]}.
@@ -26,14 +20,13 @@ type itemsResult struct {
 	Items []jsonItem `json:"items"`
 }
 
-// toJSONItems turns list-format items into their JSON shape. address
-// is "<kind>/<name>"; hook is the raw hook string, which may be
-// empty — unlike the text form, it does not carry the "(no
-// description)" placeholder.
-func toJSONItems(items []listItem) []jsonItem {
+// toJSONItems turns vault items into their JSON shape. hook is the
+// raw hook string, which may be empty — unlike the text form, it
+// does not carry the "(no description)" placeholder.
+func toJSONItems(items []vault.Item) []jsonItem {
 	out := make([]jsonItem, 0, len(items))
 	for _, it := range items {
-		out = append(out, jsonItem{Address: it.kind + "/" + it.name, Hook: it.hook})
+		out = append(out, jsonItem{Address: it.Address(), Hook: it.Hook})
 	}
 	return out
 }
@@ -47,24 +40,12 @@ func cmdList(out, errOut io.Writer, m mode) int {
 		return 1
 	}
 	printWarnings(errOut, v)
-	skills, err := vault.ListSkills(v)
+	items, err := vault.AllItems(v)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
-	facts, err := vault.ListFacts(v)
-	if err != nil {
-		fmt.Fprintln(errOut, err)
-		return 1
-	}
-	items := make([]listItem, 0, len(skills)+len(facts))
-	for _, s := range skills {
-		items = append(items, listItem{kind: "skill", name: s.Name, hook: s.Description})
-	}
-	for _, f := range facts {
-		items = append(items, listItem{kind: "memory", name: f.Name, hook: f.Description})
-	}
-	sortItems(items)
+	vault.SortItems(items)
 	if m == modeJSON {
 		printJSON(out, itemsResult{Items: toJSONItems(items)})
 		return 0
@@ -73,26 +54,11 @@ func cmdList(out, errOut io.Writer, m mode) int {
 	return 0
 }
 
-// sortItems orders items kind then name, the order "loadout list" and
-// "loadout recall" both use.
-func sortItems(items []listItem) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].kind != items[j].kind {
-			return items[i].kind < items[j].kind
-		}
-		return items[i].name < items[j].name
-	})
-}
-
 // printItems writes one line per item: "<kind>/<name> — <hook>". A
 // blank hook becomes "(no description)". Both "loadout list" and
 // "loadout recall" use this, so their output lines match exactly.
-func printItems(out io.Writer, items []listItem) {
+func printItems(out io.Writer, items []vault.Item) {
 	for _, it := range items {
-		hook := it.hook
-		if hook == "" {
-			hook = "(no description)"
-		}
-		fmt.Fprintf(out, "%s/%s — %s\n", it.kind, it.name, hook)
+		fmt.Fprintf(out, "%s — %s\n", it.Address(), vault.HookOrDefault(it.Hook))
 	}
 }
