@@ -190,8 +190,11 @@ Push items to hosted agents such as Devin over their APIs. Success: a vault edit
 
 Security note carried from Phase 6: the local `http_request` broker allows a request with no `{{secret:}}` placeholder to reach any host (a general fetch). This is safe for the local stdio server, which runs as the user. A hosted broker must gate it — block private, link-local, and cloud-metadata address ranges (SSRF), or require an allowlist for every request. Also: the response scrub catches only a verbatim reflected secret; a host that transforms the secret (base64, url-encode) bypasses it, so the allowlist stays the real trust boundary. Query-param secrets and JSON-RPC batches are unsupported.
 
-**Phase 8 — Dashboard.**
-The Linear-grade web app with in-browser decryption. Success: full browse, edit, review, and audit from the browser.
+**Phase 8a — Device roles (the dashboard security foundation).**
+A device has a role: `full` or `no-secrets`. The tar snapshot still encrypts to every device (so every device syncs skills and memory), but each `secret/*` value encrypts to full devices only. A no-secrets device receives the vault and reads skills, memory, and metadata, but holds secret ciphertext it cannot open. `loadout devices approve <name> --no-secrets` enrols a no-secrets device. Success: a no-secrets device syncs the whole vault and provably cannot decrypt any secret value.
+
+**Phase 8b — Dashboard.**
+The Linear-grade web app, deployed to the owner's Vercel. It enrols as a no-secrets device, connects to `loadoutd`, and decrypts the tar snapshot in the browser (age in WASM). Success: full browse, edit, review, and audit of skills and memory from the browser, with secrets shown as metadata only — no key value ever reaches the browser.
 
 ## 13. Recommended stack
 
