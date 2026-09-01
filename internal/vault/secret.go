@@ -148,8 +148,12 @@ func SecretExists(v *Vault, name string) bool {
 // place.
 //
 // This device's own role comes from its own roster entry, found by
-// matching DeviceRecipient against every entry's Recipient. A device
-// not yet enrolled in the roster (bootstrap: the first, owner device,
+// matching DeviceRecipient against every entry's Recipient, using
+// sameRecipient (case-insensitive) rather than raw string equality —
+// see sameRecipient's own doc comment for why a plain "==" or even an
+// age.ParseX25519Recipient round trip both fail to recognize a
+// same-key entry written in a different letter case. A device not yet
+// enrolled in the roster at all (bootstrap: the first, owner device,
 // before any devices.toml exists) is treated as RoleFull — the same
 // "roster ∪ self" union secretRecipients has always given an
 // unenrolled device, now conditioned on role.
@@ -171,7 +175,7 @@ func secretRecipients(v *Vault) ([]age.Recipient, error) {
 	selfRole := RoleFull
 	selfEnrolled := false
 	for _, e := range entries {
-		if e.Recipient == self.String() {
+		if sameRecipient(e.Recipient, self.String()) {
 			selfRole = e.Role
 			selfEnrolled = true
 			break
@@ -224,11 +228,38 @@ func selfRole(v *Vault) (string, error) {
 	}
 	self := identity.Recipient().String()
 	for _, e := range entries {
-		if e.Recipient == self {
+		if sameRecipient(e.Recipient, self) {
 			return e.Role, nil
 		}
 	}
 	return RoleFull, nil
+}
+
+// sameRecipient reports whether raw — a roster entry's recipient text,
+// exactly as devices.toml holds it — identifies the same age X25519
+// recipient as self, which must already be in its canonical form (the
+// exact string identity.Recipient().String() returns).
+//
+// This is deliberately a case-insensitive TEXT compare, not a
+// parse-then-compare: age.ParseX25519Recipient's own bech32 decoder
+// checks the decoded human-readable part against the literal lowercase
+// "age" WITHOUT folding case first (filippo.io/age's x25519.go), so it
+// REJECTS a validly-encoded all-uppercase recipient outright rather
+// than normalizing it — parsing raw and comparing .String() would
+// therefore still miss a same-key entry written in a different case,
+// exactly the raw "==" bug this function replaces.
+//
+// This is still safe and exact: bech32's checksum is computed over the
+// human-readable part folded to lowercase either way (both the
+// reference algorithm and this age fork's own hrpExpand lowercase it
+// internally), so casing carries no information distinguishing one
+// valid recipient from another — two strings equal after folding case
+// always decode to the identical public key. A raw, non-bech32,
+// unparseable, or genuinely different-key string never matches self
+// here either: it is simply unequal to self's canonical text once both
+// are folded to the same case.
+func sameRecipient(raw, self string) bool {
+	return strings.EqualFold(raw, self)
 }
 
 // noSecretsWriteErr is the fixed error AddSecret and RotateSecret

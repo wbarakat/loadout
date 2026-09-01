@@ -1347,3 +1347,131 @@ func TestRotateSecretRefusedOnNoSecretsSelfDevice(t *testing.T) {
 		t.Fatal("a refused rotate must never touch the existing value")
 	}
 }
+
+// TestSelfNoSecretsRecognizedRegardlessOfRecipientCase is the
+// regression test for a fail-open bypass a security review found in
+// the self-match comparison: it used raw string equality between a
+// roster entry's recipient text and this device's own canonical
+// recipient, so this device's OWN roster entry — with an explicit
+// role="no-secrets" — went unrecognized whenever that entry's
+// recipient was written in a different letter case (a hand-edited
+// devices.toml, all-uppercase bech32, is valid input a human or a
+// script could produce). An unrecognized self entry fell through to
+// "not enrolled" and the bootstrap default of RoleFull, so this
+// no-secrets device silently kept — and regained — its own
+// secrets-decrypt access. Bech32 casing carries no information (both
+// the encoder and decoder fold it before computing the checksum), so
+// two recipient strings equal after folding case always name the same
+// underlying key; sameRecipient (secret.go) now compares this way
+// instead of by raw "==".
+//
+// This device's own role must be recognized as no-secrets, and
+// honored, regardless of the stored recipient's case:
+//   - AddSecret is refused outright (the write-side gate recognizes
+//     self as no-secrets).
+//   - Forcing a write past that gate — ReEncryptSecrets, which has no
+//     such refusal, re-encrypting a secret added before the roster
+//     entry existed — drops this device from the secret's recipients,
+//     and a real age.Decrypt with this device's own identity on the
+//     result FAILS.
+func TestSelfNoSecretsRecognizedRegardlessOfRecipientCase(t *testing.T) {
+	v := newVault(t)
+
+	// Added while this device is still unenrolled (bootstrap: full),
+	// so its own identity is a recipient of the ORIGINAL ciphertext.
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+
+	ownRecipient, err := vault.DeviceRecipient(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upper := strings.ToUpper(ownRecipient)
+	if upper == ownRecipient {
+		t.Fatal("test setup: an age recipient must contain a lowercase letter to exercise the case-sensitivity bug")
+	}
+	if err := vault.AddToRoster(v, "this-device", upper, vault.RoleNoSecrets); err != nil {
+		t.Fatal(err)
+	}
+	// A full peer, so the roster still has a valid recipient to
+	// re-encrypt to once this device is (correctly) excluded — without
+	// one, ReEncryptSecrets would fail outright on "no recipients
+	// specified" rather than exercising the exclusion this test is
+	// about.
+	fullPeer, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "full-peer", fullPeer.Recipient().String(), vault.RoleFull); err != nil {
+		t.Fatal(err)
+	}
+
+	// The write-side gate: AddSecret must recognize this device as
+	// no-secrets and refuse, even though the roster stores its
+	// recipient in a different case than DeviceRecipient returns.
+	err = vault.AddSecret(v, "another-key", "openai", "", "", "human", nil, []byte(dummySecretValue))
+	if err == nil {
+		t.Fatal("AddSecret must be refused: this device's own roster entry is no-secrets, regardless of its recipient's case")
+	}
+	want := "this device is enrolled as no-secrets and cannot add or rotate a secret. Fix: use a full device."
+	if err.Error() != want {
+		t.Fatalf("bad error: got %q, want %q", err.Error(), want)
+	}
+
+	// Force a write past that gate: ReEncryptSecrets re-encrypts the
+	// pre-existing secret to the CURRENT recipients, and carries no
+	// no-secrets refusal of its own.
+	if _, err := vault.ReEncryptSecrets(v); err != nil {
+		t.Fatal(err)
+	}
+
+	ciphertext, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := deviceIdentityFor(t, v)
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), identity); err == nil {
+		t.Fatal("SECURITY VIOLATION: this no-secrets device decrypted its own secret after re-encrypt, despite its roster entry's recipient being written in a different case")
+	}
+	// The full peer must still decrypt: the fix excludes only this
+	// no-secrets device, not the whole recipient list.
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), fullPeer); err != nil {
+		t.Fatalf("the full peer must still decrypt after re-encrypt: %v", err)
+	}
+}
+
+// TestSecretRecipientsSelfMatchBackwardCompatCanonicalCase proves the
+// fix above changes nothing for the ordinary, canonical-case roster
+// this device has always written for itself: a full self-entry, in
+// the exact case DeviceRecipient/AddToRoster produce, is still
+// recognized, still included, and still decrypts.
+func TestSecretRecipientsSelfMatchBackwardCompatCanonicalCase(t *testing.T) {
+	v := newVault(t)
+	ownRecipient, err := vault.DeviceRecipient(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "this-device", ownRecipient, vault.RoleFull); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", nil, []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := deviceIdentityFor(t, v)
+	r, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
+	if err != nil {
+		t.Fatalf("this device must decrypt its own secret with an ordinary, canonical-case full roster entry: %v", err)
+	}
+	var plaintext bytes.Buffer
+	if _, err := plaintext.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	if plaintext.String() != dummySecretValue {
+		t.Fatalf("decrypted value = %q, want %q", plaintext.String(), dummySecretValue)
+	}
+}
