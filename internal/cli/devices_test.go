@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1052,5 +1053,273 @@ func TestDevicesApproveIdempotentRetriesAFailedSync(t *testing.T) {
 	useDeviceEnv(t, baseB)
 	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
 		t.Fatalf("sync --remote on B must now succeed, proving the retried sync really pushed: %s", errOut)
+	}
+}
+
+// --- Task 4: secrets sync + re-encrypt on approval ---
+
+// writeOrphanSecret hand-crafts a secret directly on v's filesystem,
+// its value.age encrypted ONLY to stranger — never to v's own device
+// key, and never to anyone in v's roster. It reproduces the shape a
+// secret some other, long-gone device added would take: one the
+// device now running "devices approve" genuinely cannot decrypt.
+// value never appears anywhere outside this function's own age
+// encryption call.
+func writeOrphanSecret(t *testing.T, v *vault.Vault, name, value string, stranger *age.X25519Identity) {
+	t.Helper()
+	dir := filepath.Join(v.SecretsDir(), name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := "---\nname: " + name + "\nservice: orphan\nhook: \nrotate_after: \nby: human\nat: 2024-01-01T00:00:00Z\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "meta.md"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	w, err := age.Encrypt(&buf, stranger.Recipient())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(value)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "value.age"), buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Snapshot(v, "hand-craft an orphan secret"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSecretSyncsToAlreadyApprovedDevice proves the base case Task 4
+// builds on: secrets/ ciphertext syncs through the ordinary Phase 4
+// snapshot exactly like skills and memory. B is already approved
+// BEFORE A ever creates the secret, so no re-encrypt is even needed —
+// B is already a recipient at AddSecret time — and B's sync still
+// decrypts it correctly.
+func TestSecretSyncsToAlreadyApprovedDevice(t *testing.T) {
+	ts, token := newRemoteTestServer(t)
+
+	baseA := newDeviceEnv(t)
+	useDeviceEnv(t, baseA)
+	run(t, "init")
+	writeDeviceName(t, baseA, "device-a")
+	run(t, "remote", "add", ts.URL, token)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("bootstrap sync on A failed: %s", errOut)
+	}
+
+	baseB := newDeviceEnv(t)
+	useDeviceEnv(t, baseB)
+	run(t, "init")
+	writeDeviceName(t, baseB, "device-b")
+	if _, errOut, code := run(t, "join", ts.URL, token); code != 0 {
+		t.Fatalf("join B failed: %s", errOut)
+	}
+
+	useDeviceEnv(t, baseA)
+	if _, errOut, code := run(t, "devices", "approve", "device-b"); code != 0 {
+		t.Fatalf("approve B failed: %s", errOut)
+	}
+
+	useDeviceEnv(t, baseB)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on B failed: %s", errOut)
+	}
+
+	// B is now fully approved and already caught up. A creates a
+	// brand-new secret only after that.
+	useDeviceEnv(t, baseA)
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai"); code != 0 {
+		t.Fatalf("secret add on A failed: %s", errOut)
+	}
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on A failed: %s", errOut)
+	}
+
+	useDeviceEnv(t, baseB)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on B failed: %s", errOut)
+	}
+	out, errOut, code := run(t, "secret", "show", "openai-key", "--reveal")
+	if code != 0 {
+		t.Fatalf("secret show --reveal on B failed: %s", errOut)
+	}
+	if out != dummySecretValue {
+		t.Fatalf("B's decrypted secret = %q, want %q", out, dummySecretValue)
+	}
+}
+
+// TestNewlyApprovedDeviceDecryptsPreExistingSecret is the headline
+// Task 4 test: device C is approved AFTER A already created a secret.
+// Before approval, C cannot even decrypt the snapshot at all (it is
+// not yet a recipient of anything). Approving C must re-encrypt the
+// PRE-EXISTING secret to the new roster — not just carry it forward
+// unchanged — so that once C syncs, it can decrypt a secret it never
+// witnessed being created.
+func TestNewlyApprovedDeviceDecryptsPreExistingSecret(t *testing.T) {
+	ts, token := newRemoteTestServer(t)
+
+	baseA := newDeviceEnv(t)
+	useDeviceEnv(t, baseA)
+	run(t, "init")
+	writeDeviceName(t, baseA, "device-a")
+	run(t, "remote", "add", ts.URL, token)
+
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai"); code != 0 {
+		t.Fatalf("secret add on A failed: %s", errOut)
+	}
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on A failed: %s", errOut)
+	}
+
+	baseC := newDeviceEnv(t)
+	useDeviceEnv(t, baseC)
+	run(t, "init")
+	writeDeviceName(t, baseC, "device-c")
+	if _, errOut, code := run(t, "join", ts.URL, token); code != 0 {
+		t.Fatalf("join C failed: %s", errOut)
+	}
+
+	// Before approval: C is not a recipient of anything A has pushed,
+	// secrets included, so its sync fails cleanly.
+	_, errOut, code := run(t, "sync", "--remote")
+	if code != 1 {
+		t.Fatalf("sync on C before approval must fail, got %d", code)
+	}
+	if !strings.Contains(errOut, "this device cannot decrypt the snapshot") {
+		t.Fatalf("bad error for C's pre-approval sync: %q", errOut)
+	}
+
+	// A approves C: this must re-encrypt the pre-existing secret to
+	// the roster as it now stands (A and C) before A's own sync
+	// pushes it.
+	useDeviceEnv(t, baseA)
+	if _, errOut, code := run(t, "devices", "approve", "device-c"); code != 0 {
+		t.Fatalf("approve C failed: %s", errOut)
+	}
+
+	// C syncs and must now decrypt the secret it never saw created —
+	// proof ReEncryptSecrets actually ran during the approval.
+	useDeviceEnv(t, baseC)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on C failed: %s", errOut)
+	}
+	out, errOut, code := run(t, "secret", "show", "openai-key", "--reveal")
+	if code != 0 {
+		t.Fatalf("secret show --reveal on C failed: %s", errOut)
+	}
+	if out != dummySecretValue {
+		t.Fatalf("C's decrypted secret = %q, want %q", out, dummySecretValue)
+	}
+}
+
+// TestSecretBearingSnapshotNeverHoldsPlaintextOnServer proves
+// INVARIANT 8 end to end for secrets: the raw bytes loadoutd stores
+// for a secret-bearing snapshot never contain the dummy secret value
+// — it exists only doubly-wrapped, inside value.age's own age layer,
+// itself inside the outer snapshot's age layer.
+func TestSecretBearingSnapshotNeverHoldsPlaintextOnServer(t *testing.T) {
+	ts, token, store := newRemoteTestServerWithStore(t)
+
+	base := newDeviceEnv(t)
+	useDeviceEnv(t, base)
+	run(t, "init")
+	writeDeviceName(t, base, "device-a")
+	run(t, "remote", "add", ts.URL, token)
+
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai"); code != 0 {
+		t.Fatalf("secret add failed: %s", errOut)
+	}
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote failed: %s", errOut)
+	}
+
+	info, err := store.Latest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Version == "" {
+		t.Fatal("the server must hold a snapshot version after the sync")
+	}
+	blob, err := os.ReadFile(filepath.Join(store.Root, "blobs", info.Version))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(blob, []byte(dummySecretValue)) {
+		t.Fatal("INVARIANT 8: the server-stored snapshot blob must never contain the plaintext secret value")
+	}
+}
+
+// TestDevicesApproveWarnsOnUndecryptableSecretButStillSyncs proves the
+// partial-success contract: a secret the approving device itself
+// cannot decrypt (a hand-crafted orphan here, standing in for one some
+// other, now-gone device added) is skipped with a warning that names
+// it, and the approval still succeeds and still syncs — a decryptable
+// secret added alongside it still reaches the new device normally.
+// The orphan's own value never appears in any output.
+func TestDevicesApproveWarnsOnUndecryptableSecretButStillSyncs(t *testing.T) {
+	ts, token := newRemoteTestServer(t)
+
+	base := newDeviceEnv(t)
+	useDeviceEnv(t, base)
+	run(t, "init")
+	writeDeviceName(t, base, "device-a")
+	run(t, "remote", "add", ts.URL, token)
+
+	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai"); code != 0 {
+		t.Fatalf("secret add failed: %s", errOut)
+	}
+
+	v, err := vault.Open(filepath.Join(base, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const orphanValue = "orphan-secret-do-not-leak"
+	stranger, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeOrphanSecret(t, v, "orphan-key", orphanValue, stranger)
+
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote failed: %s", errOut)
+	}
+
+	baseC := newDeviceEnv(t)
+	useDeviceEnv(t, baseC)
+	run(t, "init")
+	writeDeviceName(t, baseC, "device-c")
+	if _, errOut, code := run(t, "join", ts.URL, token); code != 0 {
+		t.Fatalf("join C failed: %s", errOut)
+	}
+
+	useDeviceEnv(t, base)
+	out, errOut, code := run(t, "devices", "approve", "device-c")
+	if code != 0 {
+		t.Fatalf("approve must still succeed despite one undecryptable secret: %s", errOut)
+	}
+	wantWarning := "warning: could not re-encrypt these secrets for the new device (this device cannot read them): orphan-key. Fix: re-run approve from a device that can read them.\n"
+	if !strings.Contains(errOut, wantWarning) {
+		t.Fatalf("bad warning: got %q want it to contain %q", errOut, wantWarning)
+	}
+	if strings.Contains(out, orphanValue) || strings.Contains(errOut, orphanValue) {
+		t.Fatal("the warning must never leak the secret's value")
+	}
+
+	// The OTHER, decryptable secret still reaches C normally.
+	useDeviceEnv(t, baseC)
+	if _, errOut, code := run(t, "sync", "--remote"); code != 0 {
+		t.Fatalf("sync --remote on C failed: %s", errOut)
+	}
+	got, errOut, code := run(t, "secret", "show", "openai-key", "--reveal")
+	if code != 0 {
+		t.Fatalf("secret show on C failed: %s", errOut)
+	}
+	if got != dummySecretValue {
+		t.Fatalf("C's decrypted secret = %q, want %q", got, dummySecretValue)
 	}
 }

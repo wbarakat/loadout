@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"filippo.io/age"
 	"loadout.dev/loadout/internal/remote"
@@ -230,6 +231,17 @@ func cmdDevicesApprove(out, errOut io.Writer, args []string, m mode) int {
 		return 1
 	}
 
+	// A secret ReEncryptSecrets could not re-encrypt for the new
+	// device is a warning, never a reason to block enrollment: partial
+	// success (every OTHER secret and the whole roster change) beats
+	// leaving the device unapproved. It names only the secrets, never
+	// a value (INVARIANT 10).
+	if len(result.skippedSecrets) > 0 {
+		fmt.Fprintf(errOut,
+			"warning: could not re-encrypt these secrets for the new device (this device cannot read them): %s. Fix: re-run approve from a device that can read them.\n",
+			strings.Join(result.skippedSecrets, ", "))
+	}
+
 	// Every other outcome — a fresh approval, a deliberate rotation,
 	// or an idempotent same-recipient re-approval — syncs now: even
 	// the idempotent path must retry a push that failed after an
@@ -326,6 +338,12 @@ type approveResult struct {
 	// stored is only set for approveMismatchBlocked: the recipient
 	// devices.toml already held for name.
 	stored string
+	// skippedSecrets names every secret ReEncryptSecrets could not
+	// re-encrypt for the new roster (this device could not decrypt
+	// it), set only for approveAdded and approveRotated — the two
+	// outcomes that actually change the roster. Names only, never a
+	// value: INVARIANT 10.
+	skippedSecrets []string
 }
 
 // invalidRecipientErr is the fixed error approvePlain and
@@ -399,10 +417,18 @@ func approvePlain(v *vault.Vault, name, recipient string) (approveResult, error)
 	if err := vault.AddToRoster(v, name, recipient); err != nil {
 		return approveResult{}, err
 	}
+	// Re-encrypt every secret to the roster as it now stands — the new
+	// device included — BEFORE this snapshot: that is what makes the
+	// re-encrypted value.age files part of the same commit the
+	// caller's remote.Sync is about to push.
+	skipped, err := vault.ReEncryptSecrets(v)
+	if err != nil {
+		return approveResult{}, err
+	}
 	if err := vault.Snapshot(v, "approve device "+name); err != nil {
 		return approveResult{}, err
 	}
-	return approveResult{kind: approveAdded, recipient: recipient}, nil
+	return approveResult{kind: approveAdded, recipient: recipient, skippedSecrets: skipped}, nil
 }
 
 // rotateDevice sets name's roster entry to recipient — a value the
@@ -446,8 +472,15 @@ func rotateDevice(v *vault.Vault, name, recipient string) (approveResult, error)
 	if err := vault.AddToRoster(v, name, recipient); err != nil {
 		return approveResult{}, err
 	}
+	// Same ordering as approvePlain: re-encrypt to the post-rotation
+	// roster before this snapshot, so the rotated-in key's ciphertext
+	// travels in the same commit the caller's remote.Sync pushes.
+	skipped, err := vault.ReEncryptSecrets(v)
+	if err != nil {
+		return approveResult{}, err
+	}
 	if err := vault.Snapshot(v, "rotate device "+name+" key"); err != nil {
 		return approveResult{}, err
 	}
-	return approveResult{kind: approveRotated, recipient: recipient}, nil
+	return approveResult{kind: approveRotated, recipient: recipient, skippedSecrets: skipped}, nil
 }

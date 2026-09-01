@@ -451,3 +451,188 @@ func TestSecretsAreTrackedAccessLogIsGitignored(t *testing.T) {
 		t.Fatal("a pack must never carry the plaintext secret value, even double-wrapped in the outer age layer")
 	}
 }
+
+// TestReEncryptSecretsAddsNewRecipient proves the headline mechanism
+// Task 4 exists for: a secret added before some device joined the
+// roster is unreadable to that device's identity beforehand, and
+// becomes readable once ReEncryptSecrets runs after the roster gains
+// it. This device's own identity must still decrypt the secret
+// afterward too.
+func TestReEncryptSecretsAddsNewRecipient(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+
+	newcomer, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ciphertext, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), newcomer); err == nil {
+		t.Fatal("the newcomer must not be able to decrypt the secret before it joins the roster")
+	}
+
+	if err := vault.AddToRoster(v, "newcomer", newcomer.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped, err := vault.ReEncryptSecrets(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("skipped = %v, want none", skipped)
+	}
+
+	ciphertext, err = os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := age.Decrypt(bytes.NewReader(ciphertext), newcomer)
+	if err != nil {
+		t.Fatalf("the newcomer must decrypt the secret after ReEncryptSecrets: %v", err)
+	}
+	var plaintext bytes.Buffer
+	if _, err := plaintext.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	if plaintext.String() != dummySecretValue {
+		t.Fatalf("newcomer's decrypted value = %q, want %q", plaintext.String(), dummySecretValue)
+	}
+
+	identity := deviceIdentityFor(t, v)
+	r2, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
+	if err != nil {
+		t.Fatalf("this device must still decrypt its own secret after re-encrypt: %v", err)
+	}
+	var plaintext2 bytes.Buffer
+	if _, err := plaintext2.ReadFrom(r2); err != nil {
+		t.Fatal(err)
+	}
+	if plaintext2.String() != dummySecretValue {
+		t.Fatal("this device's own decrypted value must be unchanged after re-encrypt")
+	}
+}
+
+// TestReEncryptSecretsLeavesMetaUnchanged proves ReEncryptSecrets only
+// ever rewrites value.age: meta.md's bytes are untouched.
+func TestReEncryptSecretsLeavesMetaUnchanged(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "deploy hook", "", "human", []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+	metaPath := filepath.Join(v.SecretsDir(), "openai-key", "meta.md")
+	before, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AddToRoster(v, "other-device", other.Recipient().String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.ReEncryptSecrets(v); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("meta.md must be unchanged by ReEncryptSecrets, before:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// TestReEncryptSecretsSkipsUndecryptableSecretByNameOnly proves the
+// safety net: a secret's value.age this device was never a recipient
+// of (hand-crafted here, the shape an old orphaned secret would take)
+// is skipped, not fatal, and the skip list carries only its NAME,
+// never its value. Every other, decryptable secret still gets
+// re-encrypted normally in the same call.
+func TestReEncryptSecretsSkipsUndecryptableSecretByNameOnly(t *testing.T) {
+	v := newVault(t)
+	if err := vault.AddSecret(v, "openai-key", "openai", "", "", "human", []byte(dummySecretValue)); err != nil {
+		t.Fatal(err)
+	}
+
+	const orphanValue = "orphan-secret-do-not-leak"
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(v.SecretsDir(), "orphan-key")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := "---\nname: orphan-key\nservice: orphan\nhook: \nrotate_after: \nby: human\nat: 2024-01-01T00:00:00Z\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "meta.md"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	w, err := age.Encrypt(&buf, other.Recipient())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(orphanValue)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "value.age"), buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped, err := vault.ReEncryptSecrets(v)
+	if err != nil {
+		t.Fatalf("ReEncryptSecrets must not fail the whole run over one undecryptable secret: %v", err)
+	}
+	if len(skipped) != 1 || skipped[0] != "orphan-key" {
+		t.Fatalf("skipped = %v, want [orphan-key]", skipped)
+	}
+	for _, name := range skipped {
+		if strings.Contains(name, orphanValue) {
+			t.Fatal("the skip list must never carry a secret value, names only")
+		}
+	}
+
+	// The decryptable secret must still have been re-encrypted fine.
+	ciphertext, err := os.ReadFile(filepath.Join(v.SecretsDir(), "openai-key", "value.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := deviceIdentityFor(t, v)
+	r, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
+	if err != nil {
+		t.Fatalf("the decryptable secret must remain decryptable: %v", err)
+	}
+	var plaintext bytes.Buffer
+	if _, err := plaintext.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	if plaintext.String() != dummySecretValue {
+		t.Fatal("the decryptable secret's value must be unchanged")
+	}
+}
+
+// TestReEncryptSecretsOnEmptyVault proves a vault with no secrets at
+// all is a no-op: no error, no skipped names.
+func TestReEncryptSecretsOnEmptyVault(t *testing.T) {
+	v := newVault(t)
+	skipped, err := vault.ReEncryptSecrets(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("skipped = %v, want none", skipped)
+	}
+}

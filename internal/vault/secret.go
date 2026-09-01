@@ -266,3 +266,108 @@ func DecryptSecret(v *Vault, name string) ([]byte, error) {
 	}
 	return plaintext.Bytes(), nil
 }
+
+// ReEncryptSecrets re-encrypts every secret's value.age to the
+// CURRENT device roster (secretRecipients: roster ∪ self). Call it
+// right after a roster change — a fresh device approval, or a
+// rotation — so the next snapshot carries ciphertext the newcomer can
+// actually decrypt. value.age's old bytes are atomically replaced;
+// meta.md is never touched.
+//
+// A secret this device cannot decrypt is skipped, not fatal: this
+// should not happen for a device that already holds every secret, but
+// ReEncryptSecrets stays safe against it rather than assume it cannot
+// occur. skipped lists such a secret's NAME only — INVARIANT 10 holds
+// here too, so the caller can warn about it without ever handling or
+// logging the value. A real failure past that point (the roster
+// itself unreadable, or a write failing) still stops the whole run
+// and returns a non-nil error, since that is not a per-secret problem
+// this function can safely paper over.
+//
+// Every plaintext DecryptSecret hands back is zeroed once this
+// function is done with it, on every path, the same way AddSecret
+// zeroes its caller's own buffer.
+func ReEncryptSecrets(v *Vault) (skipped []string, err error) {
+	secrets, err := ListSecrets(v)
+	if err != nil {
+		return nil, err
+	}
+	if len(secrets) == 0 {
+		return nil, nil
+	}
+	recipients, err := secretRecipients(v)
+	if err != nil {
+		return nil, err
+	}
+	for _, secret := range secrets {
+		skip, err := reEncryptOneSecret(v, secret.Name, recipients)
+		if err != nil {
+			return skipped, err
+		}
+		if skip {
+			skipped = append(skipped, secret.Name)
+		}
+	}
+	return skipped, nil
+}
+
+// reEncryptOneSecret decrypts one secret with this device's own key
+// and rewrites its value.age encrypted to recipients. skip is true,
+// with a nil error, when this device cannot decrypt the secret at
+// all: ReEncryptSecrets treats that as one skipped item, never a
+// reason to fail the whole run.
+func reEncryptOneSecret(v *Vault, name string, recipients []age.Recipient) (skip bool, err error) {
+	plaintext, err := DecryptSecret(v, name)
+	if err != nil {
+		return true, nil
+	}
+	defer func() {
+		for i := range plaintext {
+			plaintext[i] = 0
+		}
+	}()
+	return false, writeSecretValue(v, name, recipients, plaintext)
+}
+
+// writeSecretValue age-encrypts plaintext to recipients and
+// atomically replaces secret name's value.age: a temp file written
+// next to it, then renamed into place, so a crash mid-write never
+// leaves value.age half-written or missing.
+//
+// INVARIANT 10: plaintext never appears in an error message here.
+func writeSecretValue(v *Vault, name string, recipients []age.Recipient, plaintext []byte) error {
+	var buf bytes.Buffer
+	w, err := age.Encrypt(&buf, recipients...)
+	if err != nil {
+		return fmt.Errorf("secret/%s: cannot be re-encrypted: %v", name, err)
+	}
+	// age buffers plaintext chunks inside its own STREAM writer while
+	// it encrypts. This code cannot reach or zero that buffer: it is a
+	// known, accepted, library-level exposure window (see AddSecret).
+	if _, err := w.Write(plaintext); err != nil {
+		return fmt.Errorf("secret/%s: cannot be re-encrypted: %v", name, err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("secret/%s: cannot be re-encrypted: %v", name, err)
+	}
+
+	dir := secretDir(v, name)
+	tmp, err := os.CreateTemp(dir, ".value.age.tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, secretValuePath(v, name))
+}
