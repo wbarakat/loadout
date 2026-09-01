@@ -44,6 +44,30 @@ func Lock(v *Vault) (release func(), err error) {
 	}
 }
 
+// TryLock makes exactly one non-blocking attempt to take the vault
+// lock. ok is false when another process already holds it: the
+// caller must treat that as "try again later," never as an error.
+// loadout watch calls this before a beat, so a beat that finds the
+// vault busy skips quietly instead of waiting out Lock's own 10s
+// timeout.
+func TryLock(v *Vault) (release func(), ok bool, err error) {
+	path := filepath.Join(v.Root, "loadout.lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, false, err
+	}
+	ensureLockIgnored(v.Root)
+
+	if flockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); flockErr != nil {
+		f.Close()
+		return nil, false, nil
+	}
+	return func() {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, true, nil
+}
+
 // ensureLockIgnored adds a loadout.lock entry to the vault's
 // .gitignore file, so the lock file never enters history. It does
 // nothing when no .gitignore file exists yet — Init and Open both

@@ -79,6 +79,56 @@ func TestLockAddsGitignoreEntry(t *testing.T) {
 	}
 }
 
+// TestTryLockSucceedsWhenFree proves TryLock takes the lock at once
+// when nothing else holds it, and that release actually frees it
+// again for a later Lock call.
+func TestTryLockSucceedsWhenFree(t *testing.T) {
+	v := newVault(t)
+	release, ok, err := vault.TryLock(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("TryLock must succeed on a free vault")
+	}
+	release()
+
+	// The lock must really be free again: a normal Lock call must not
+	// block or time out.
+	release2, err := vault.Lock(v)
+	if err != nil {
+		t.Fatalf("Lock after TryLock's release must succeed, got %v", err)
+	}
+	release2()
+}
+
+// TestTryLockFailsQuietlyWhenHeld proves TryLock returns immediately
+// with ok=false (never an error, never a block) while Lock already
+// holds the vault.
+func TestTryLockFailsQuietlyWhenHeld(t *testing.T) {
+	v := newVault(t)
+	release, err := vault.Lock(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	start := time.Now()
+	release2, ok, err := vault.TryLock(v)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("TryLock on a held vault must not error, got %v", err)
+	}
+	if ok {
+		release2()
+		t.Fatal("TryLock must report false while another holder has the lock")
+	}
+	if elapsed > 50*time.Millisecond {
+		t.Fatalf("TryLock must return at once, not poll or wait; took %v", elapsed)
+	}
+}
+
 func TestLockNoGitignoreNoOp(t *testing.T) {
 	// A bare vault, not run through Init, so no .gitignore exists yet.
 	// This isolates Lock's own behavior from Task 3's Init/Open

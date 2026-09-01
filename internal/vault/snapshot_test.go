@@ -93,6 +93,39 @@ func TestPackTarStoresSymlinkWithoutFollowing(t *testing.T) {
 	}
 }
 
+// TestHeadHashMatchesInternalHelper proves the exported HeadHash
+// wrapper (loadout watch's own way to notice a beat changed the
+// vault) reports exactly what the package's internal headHash does,
+// and that it moves when a new commit lands.
+func TestHeadHashMatchesInternalHelper(t *testing.T) {
+	v := newSnapshotTestVault(t)
+	want, err := headHash(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := HeadHash(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("HeadHash() = %q, want %q", got, want)
+	}
+
+	if err := os.WriteFile(filepath.Join(v.MemoryDir(), "new.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Snapshot(v, "add a fact"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := HeadHash(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == got {
+		t.Fatal("HeadHash must change after a real commit")
+	}
+}
+
 // TestPackAndUnpackRoundTrip proves a pack, followed by an unpack,
 // reproduces every file's content and mode, and that PackSnapshot's
 // headHash names the commit that pinned that content.

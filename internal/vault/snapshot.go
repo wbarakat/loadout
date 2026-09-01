@@ -114,6 +114,15 @@ func headHash(v *Vault) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// HeadHash returns the vault's current git HEAD commit hash: the
+// same identifier PackSnapshot pins a snapshot to. loadout watch
+// calls this before and after a beat to notice whether the vault's
+// tracked content actually changed, so a beat with nothing new stays
+// silent.
+func HeadHash(v *Vault) (string, error) {
+	return headHash(v)
+}
+
 // PackSnapshot builds an encrypted snapshot of the vault's synced
 // paths (SyncedSet) and reports the git HEAD hash that snapshot's
 // content is pinned to. It encrypts to every recipient listed in

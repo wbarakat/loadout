@@ -7,8 +7,9 @@ Phase 2 adds the full agent interface: typed reports, the vault lock,
 provenance, review, and `--json` on every verb. Phase 3 adds four
 adapters: codex, gemini, cursor, and hermes. The Adapters section
 below covers all six local tools, plus a generic AGENTS.md adapter.
-Phase 1 through Phase 3 are local only. Cloud sync and secrets come
-next. See PLAN.md for the roadmap.
+Phase 4 adds cloud sync: `loadoutd`, device enrollment, and `loadout
+watch`. See the "Sync across your machines" section below. Secrets
+come next. See PLAN.md for the roadmap.
 
 ## Install
 
@@ -42,7 +43,8 @@ lists every verb Loadout supports today.
 | `list` | Print every item, one hook line each. |
 | `context` | Print the compact picture of the vault: counts, every hook, recent history. |
 | `recall <term>...` | Search hooks and bodies for items that match every term. |
-| `sync [--dry-run]` | Project the vault into every enabled tool. |
+| `sync [--dry-run] [--remote]` | Project the vault into every enabled tool. `--remote` also syncs with the configured remote. |
+| `watch [--interval <duration>]` | Run `sync --remote` in a loop until Ctrl-C. Default interval: 10s. |
 | `status` | Print vault counts and each adapter's sync state. |
 | `doctor` | List every problem, each with its exact fix. |
 | `log` | Print the vault history, newest first. |
@@ -50,6 +52,12 @@ lists every verb Loadout supports today.
 | `review` | List draft items — items an agent wrote — that await your decision. |
 | `review keep <kind>/<name>` | Mark a draft item kept. |
 | `review drop <kind>/<name>` | Delete a draft item. |
+| `remote` | Show the configured remote and the last synced version. |
+| `remote add <url> <token>` | Configure the remote this vault syncs with. |
+| `join <url> <token>` | Enroll this device with a remote. It waits for approval. |
+| `devices [--json]` | Show every device: approved, waiting, or re-keyed. |
+| `devices approve <name>` | Approve a waiting device. |
+| `devices approve <name> --rotate <recipient>` | Trust a verified new key for an already-approved device. |
 
 Run `loadout help` at any time to print this list from the binary
 itself.
@@ -186,3 +194,93 @@ each target file.
 - The local git history in the vault records the state at each add,
   each review decision, and each sync. `loadout log` shows it;
   `loadout undo` reverts to the state before the last change.
+
+## Sync across your machines
+
+Loadout syncs one vault across every machine you use. A small server,
+`loadoutd`, holds your data in between. `loadoutd` never sees your
+content: your device encrypts every snapshot before it leaves, and
+`loadoutd` stores only that ciphertext. Only a device you enroll can
+decrypt it.
+
+### Run the server
+
+Build `loadoutd` and start it with a data directory:
+
+    go build -o loadoutd ./cmd/loadoutd
+    ./loadoutd -data /var/lib/loadout
+
+On its first run, `loadoutd` generates an access token and prints it
+once:
+
+    loadoutd: generated an access token: 3f9a1c...e21b
+
+Copy this token now. It never prints again, and it never appears in
+any log line. Every device needs it to enroll.
+
+### Connect the first device
+
+Point your vault at the server with the url and the token:
+
+    loadout remote add http://<host>:7777 <token>
+    loadout sync --remote
+
+This device is now the vault's first trusted device. `loadout sync
+--remote` projects the vault into your local tools, then pushes it to
+the server.
+
+### Enroll a second device
+
+On the new machine, join the same server:
+
+    loadout join http://<host>:7777 <token>
+
+The new device waits for approval. It cannot read the vault yet: it
+holds no key that decrypts the content. On an already-approved
+device, approve it by name:
+
+    loadout devices approve <name>
+
+Now sync on the new device:
+
+    loadout sync --remote
+
+The new device downloads and decrypts the vault. From now on, an edit
+on either device reaches the other on its next sync.
+
+Run `loadout devices` at any time. It lists every device: approved,
+waiting, or re-keyed. A re-keyed device changed its key — for
+example, after a lost machine got a fresh install. Verify the new key
+out of band first: read it straight from `loadout device` on that
+machine. Then trust it by name:
+
+    loadout devices approve <name> --rotate <recipient>
+
+Never trust a rotated key from the server's own device list alone. An
+evicted device can still write to that list. Verify the key on the
+device itself before you rotate to it.
+
+### Keep every machine in sync automatically
+
+Run `loadout watch` to sync in the background, on a timer:
+
+    loadout watch
+
+By default, `loadout watch` runs a sync beat every 10 seconds. Set a
+different interval with `--interval`:
+
+    loadout watch --interval 1m
+
+`loadout watch` prints one line only when a beat changes something. It
+stays quiet the rest of the time. When another loadout command holds
+the vault lock, it skips that beat and tries again on the next one. If
+the remote is unreachable, it prints one error line and waits longer
+before the next try, up to five minutes. Press Ctrl-C to stop it: it
+finishes its current beat, prints "watch stopped.", and exits.
+
+### The invariant
+
+`loadoutd` stores ciphertext only. It never decrypts a snapshot, never
+holds a device's private key, and never sees a skill or a memory fact
+in the clear. Only a device listed in the vault's own `devices.toml`
+can decrypt what the server holds.

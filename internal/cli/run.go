@@ -25,6 +25,7 @@ commands:
   devices approve NAME       approve a waiting device
   devices approve NAME --rotate RECIPIENT  trust an out-of-band-verified new key
   sync [--dry-run] [--remote] project the vault into every enabled tool, and sync
+  watch [--interval DUR]     sync in a loop until Ctrl-C (default 10s)
   status                     show the vault and the adapter state
   doctor                     find problems and show the fix for each one
   log                        show the vault history
@@ -99,6 +100,8 @@ func Run(out, errOut io.Writer, args []string) int {
 		return cmdDevices(out, errOut, args[1:], m)
 	case "sync":
 		return cmdSync(out, errOut, args[1:], m)
+	case "watch":
+		return cmdWatch(out, errOut, args[1:], m)
 	case "status":
 		if rejectExtraArgs(errOut, args[1:]) {
 			return 2
