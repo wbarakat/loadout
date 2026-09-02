@@ -7,6 +7,15 @@
  */
 const nextConfig = {
   output: "export",
+  // The vault/dash library source uses explicit ".js" specifiers on
+  // relative imports of ".ts"/".tsx" files (Node ESM style, needed by
+  // vitest/tsc's own module resolution). Webpack needs this alias to find
+  // the real source file for such a specifier.
+  experimental: {
+    extensionAlias: {
+      ".js": [".ts", ".tsx", ".js"],
+    },
+  },
 };
 
 export default nextConfig;
