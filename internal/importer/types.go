@@ -11,9 +11,12 @@ import "time"
 
 // ImportCtx carries the paths an import run needs. The CLI fills
 // these from the real environment; a test fills them with temp
-// paths. The engine and every Source read only from ImportCtx —
-// never os.Getenv or os.UserHomeDir directly — so a test never
-// touches the real home, vault, or credentials.
+// paths. The engine itself reads only from ImportCtx, never
+// os.Getenv or os.UserHomeDir. A Source's Detect method can still
+// read its own override variable, such as CLAUDE_CONFIG_DIR or
+// CODEX_HOME, to find that tool's real root. A test that wants a
+// fixed fixture root must clear the relevant variable with
+// t.Setenv, so the ambient environment does not leak in.
 type ImportCtx struct {
 	// Home is the user's home directory.
 	Home string

@@ -101,6 +101,14 @@ func scanSkillsDir(dir, vaultSkillsDir, pluginsDir string) ([]CandidateSkill, []
 			continue
 		}
 
+		// Resolve the skill folder to its REAL path before reading
+		// anything from it. A skill folder is often itself a symlink
+		// (~/.claude/skills/foo -> ~/.agents/skills/foo, the common
+		// cross-tool shape) — reading SKILL.md and walking for support
+		// files through the resolved directory, rather than the
+		// symlink itself, is what lets a symlinked skill folder's
+		// support files be found at all (a plain filepath.WalkDir on
+		// a symlink root does not descend into it).
 		realPath, err := filepath.EvalSymlinks(entryPath)
 		if err != nil {
 			warnings = append(warnings, danglingSkillWarning(entryPath))
@@ -112,7 +120,7 @@ func scanSkillsDir(dir, vaultSkillsDir, pluginsDir string) ([]CandidateSkill, []
 			continue
 		}
 
-		info, err := os.Stat(entryPath)
+		info, err := os.Stat(realPath)
 		if err != nil || !info.IsDir() {
 			warnings = append(warnings, Warning{
 				Tool:   "claude-code",
@@ -122,7 +130,7 @@ func scanSkillsDir(dir, vaultSkillsDir, pluginsDir string) ([]CandidateSkill, []
 			continue
 		}
 
-		skillMDPath := filepath.Join(entryPath, "SKILL.md")
+		skillMDPath := filepath.Join(realPath, "SKILL.md")
 		raw, err := os.ReadFile(skillMDPath)
 		if err != nil {
 			warnings = append(warnings, Warning{
@@ -147,11 +155,14 @@ func scanSkillsDir(dir, vaultSkillsDir, pluginsDir string) ([]CandidateSkill, []
 			modTime = st.ModTime()
 		}
 
+		files, fileWarnings := collectSkillFiles(realPath, "claude-code")
+		warnings = append(warnings, fileWarnings...)
+
 		skills = append(skills, CandidateSkill{
 			Name:        name,
 			Description: description,
 			Body:        body,
-			Files:       collectSkillFiles(entryPath),
+			Files:       files,
 			Tool:        "claude-code",
 			ModTime:     modTime,
 		})
@@ -170,10 +181,19 @@ func danglingSkillWarning(entryPath string) Warning {
 // collectSkillFiles reads every file under dir except SKILL.md itself,
 // keyed by its path relative to dir, so a skill's supporting files
 // (references, scripts, nested folders) copy into the vault alongside
-// SKILL.md. A file that fails to read is dropped rather than aborting
-// the whole skill.
-func collectSkillFiles(dir string) map[string][]byte {
+// SKILL.md. dir must already be the skill folder's REAL path (every
+// symlink in it resolved) — the caller is responsible for that, since
+// it also needs the real path to read SKILL.md itself.
+//
+// SECRET SAFETY: a support file that is itself a symlink is only
+// collected when its own real target stays inside dir. A symlink
+// pointing outside the skill folder — a credential file elsewhere on
+// disk, for example — is skipped and warned about, never read or
+// copied. A file that fails to read is dropped without a warning,
+// same as before; a dangling or escaping support-file link is not.
+func collectSkillFiles(dir, tool string) (map[string][]byte, []Warning) {
 	files := map[string][]byte{}
+	var warnings []Warning
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -182,14 +202,31 @@ func collectSkillFiles(dir string) map[string][]byte {
 		if relErr != nil || rel == "SKILL.md" {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
+		realPath, evalErr := filepath.EvalSymlinks(path)
+		if evalErr != nil {
+			warnings = append(warnings, Warning{
+				Tool:   tool,
+				Path:   path,
+				Reason: "this support file link is dangling and does not resolve. Fix: remove the link, or point it at a real file.",
+			})
+			return nil
+		}
+		if !isWithinDir(dir, realPath) {
+			warnings = append(warnings, Warning{
+				Tool:   tool,
+				Path:   path,
+				Reason: "this support file link points outside the skill folder. Fix: keep support files inside the skill folder.",
+			})
+			return nil
+		}
+		data, readErr := os.ReadFile(realPath)
 		if readErr != nil {
 			return nil
 		}
 		files[rel] = data
 		return nil
 	})
-	return files
+	return files, warnings
 }
 
 // parseFrontmatter splits simple "key: value" YAML-ish frontmatter

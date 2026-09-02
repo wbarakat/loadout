@@ -84,33 +84,45 @@ func AddFact(v *Vault, name, by string) (string, error) {
 // relative to the skill folder. It returns the same "bad name" and
 // "already exists" errors as AddSkill, so a caller such as an
 // importer can turn either into a skip and a warning.
-func WriteSkillContent(v *Vault, name, description, body, by string, at time.Time, files map[string][]byte) (string, error) {
+//
+// A files key must never write outside the skill folder. Each key is
+// checked with filepath.IsLocal before use: a key that is absolute,
+// or that holds a ".." element, is not written, and its key is
+// returned in skipped instead — a caller such as an importer turns
+// that into its own warning. This guard runs here, not only in a
+// caller, since WriteSkillContent is the one place that actually
+// turns a key into a path on disk.
+func WriteSkillContent(v *Vault, name, description, body, by string, at time.Time, files map[string][]byte) (path string, skipped []string, err error) {
 	if !namePattern.MatchString(name) {
-		return "", fmt.Errorf("use a kebab-case name, for example: deploy-checks")
+		return "", nil, fmt.Errorf("use a kebab-case name, for example: deploy-checks")
 	}
 	dir := filepath.Join(v.SkillsDir(), name)
-	if _, err := os.Stat(dir); err == nil {
-		return "", fmt.Errorf("the skill %s already exists. Fix: choose another name, or edit the existing item.", name)
+	if _, statErr := os.Stat(dir); statErr == nil {
+		return "", nil, fmt.Errorf("the skill %s already exists. Fix: choose another name, or edit the existing item.", name)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	path := filepath.Join(dir, "SKILL.md")
+	path = filepath.Join(dir, "SKILL.md")
 	content := "---\nname: " + name + "\ndescription: " + description + "\n" +
 		provenanceLinesAt(by, at) + "---\n\n" + strings.TrimSpace(body) + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	for rel, data := range files {
+		if !filepath.IsLocal(rel) {
+			skipped = append(skipped, rel)
+			continue
+		}
 		fp := filepath.Join(dir, rel)
 		if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
-			return "", err
+			return "", skipped, err
 		}
 		if err := os.WriteFile(fp, data, 0o644); err != nil {
-			return "", err
+			return "", skipped, err
 		}
 	}
-	return path, nil
+	return path, skipped, nil
 }
 
 // WriteFactContent creates a memory fact file with real content,

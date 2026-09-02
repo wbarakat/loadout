@@ -335,6 +335,80 @@ func TestClaudeCodeSkillsSkipsSkillWithoutFrontmatter(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeSkillsExcludesSupportFileSymlinkOutsideSkillFolder is
+// the I3 regression test. A skill folder holds an ordinary support
+// file plus creds.json, a symlink pointing OUTSIDE the skill folder
+// at a file holding a sentinel secret (standing in for a real
+// credential such as ~/.codex/auth.json). Before the fix,
+// collectSkillFiles follows every file symlink inside a skill folder
+// with no containment check, so the secret's content is copied into
+// the vault as a support file under the skill's own name.
+func TestClaudeCodeSkillsExcludesSupportFileSymlinkOutsideSkillFolder(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	root := filepath.Join(home, ".claude")
+	skillDir := filepath.Join(root, "skills", "leaky")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: leaky\ndescription: has a symlinked support file\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "normal.txt"), []byte("an ordinary support file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	secretFile := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(secretFile, []byte("SENTINEL-SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secretFile, filepath.Join(skillDir, "creds.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	v := newClaudeCodeTestVault(t)
+	ctx := importer.ImportCtx{Home: home, VaultRoot: v.Root, VaultSkillsDir: v.SkillsDir()}
+
+	if _, err := importer.RunImport(v, []importer.Source{importer.ClaudeCode{}}, ctx, importer.Options{Skills: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var leaky *vault.Skill
+	for i := range skills {
+		if skills[i].Name == "leaky" {
+			leaky = &skills[i]
+		}
+	}
+	if leaky == nil {
+		t.Fatalf("want the leaky skill imported, got %+v", skills)
+	}
+	if _, err := os.Stat(filepath.Join(leaky.Dir, "creds.json")); err == nil {
+		t.Fatal("a support file symlink pointing outside the skill folder must never be copied into the vault")
+	}
+	if _, err := os.Stat(filepath.Join(leaky.Dir, "normal.txt")); err != nil {
+		t.Fatalf("an ordinary in-folder support file must still be copied: %v", err)
+	}
+
+	walkErr := filepath.WalkDir(v.Root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr == nil && strings.Contains(string(data), "SENTINEL-SECRET") {
+			t.Fatalf("the secret must appear nowhere in the vault, found in %s", path)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatal(walkErr)
+	}
+}
+
 func TestClaudeCodeMemoryClaudeMDBlockOnlyProducesNoFact(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home := t.TempDir()

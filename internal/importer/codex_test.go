@@ -275,6 +275,38 @@ func TestCodexMemoryDamagedBlockSkipsWithWarning(t *testing.T) {
 	}
 }
 
+// TestCodexMemorySkipsOversizedAgentsFileWithWarning is the I2
+// regression test: codex.go's AGENTS.md read had no size cap, unlike
+// claudecode.go's CLAUDE.md read, which already skips a file over
+// 4MiB (the same limit Claude Code itself applies) with a warning.
+func TestCodexMemorySkipsOversizedAgentsFileWithWarning(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+	home := t.TempDir()
+	root := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	big := make([]byte, 4*1024*1024+1)
+	for i := range big {
+		big[i] = 'a'
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := importer.Codex{}
+
+	facts, warnings, err := src.Memory(importer.ImportCtx{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 0 {
+		t.Fatalf("an oversized AGENTS.md must not import as one giant fact, got %+v", facts)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("want 1 warning for the oversized file, got %+v", warnings)
+	}
+}
+
 func TestCodexMemoryOverrideTakesPrecedenceOverPlain(t *testing.T) {
 	t.Setenv("CODEX_HOME", "")
 	home := t.TempDir()
@@ -479,5 +511,83 @@ func TestCrossSourceDedupImportsSharedAgentsSkillOnce(t *testing.T) {
 	}
 	if dedupedCount != 1 {
 		t.Fatalf("want shared-skill's second sighting recorded as deduped, got %d: %+v", dedupedCount, result.Deduped)
+	}
+}
+
+// TestCrossSourceDedupPreservesSupportFilesAcrossSymlinkedSkill is the
+// C1 regression test. A real skill folder holds SKILL.md plus a
+// helper.sh support file. Claude Code sees it only through a
+// symlinked skill folder (the common ~/.claude/skills/foo ->
+// ~/.agents/skills/foo shape); Codex sees the very same folder
+// directly, at its real path. Before the fix, the file walk behind a
+// symlinked root collects zero support files, and the dedup key
+// ignores CandidateSkill.Files entirely — so the two candidates hash
+// as identical and dedup keeps whichever one was seen first,
+// silently losing helper.sh whenever the symlinked (files-less) copy
+// is seen before the real (files-carrying) one. Source order below
+// puts Claude Code (the symlinked, files-less-before-the-fix side)
+// first, to reproduce exactly that ordering.
+func TestCrossSourceDedupPreservesSupportFilesAcrossSymlinkedSkill(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	home := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realSkillDir := filepath.Join(home, ".agents", "skills", "foo")
+	if err := os.MkdirAll(realSkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: foo\ndescription: seen by both claude-code and codex\n---\n\nShared body.\n"
+	if err := os.WriteFile(filepath.Join(realSkillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realSkillDir, "helper.sh"), []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	claudeSkills := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(claudeSkills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realSkillDir, filepath.Join(claudeSkills, "foo")); err != nil {
+		t.Fatal(err)
+	}
+
+	vaultSkillsDir := filepath.Join(t.TempDir(), "vault-skills")
+	if err := os.MkdirAll(vaultSkillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v := newCodexTestVault(t)
+	ctx := importer.ImportCtx{Home: home, VaultRoot: v.Root, VaultSkillsDir: vaultSkillsDir}
+
+	// Claude Code (symlinked root) first, Codex (real path) second —
+	// the exact ordering that loses helper.sh before the fix.
+	result, err := importer.RunImport(v, []importer.Source{importer.ClaudeCode{}, importer.Codex{}}, ctx, importer.Options{Skills: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foo *vault.Skill
+	count := 0
+	for i := range skills {
+		if skills[i].Name == "foo" {
+			foo = &skills[i]
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("want foo imported exactly once, got %d copies: %+v (imported=%+v deduped=%+v)", count, skills, result.Imported, result.Deduped)
+	}
+	if foo == nil {
+		t.Fatalf("want a foo skill in the vault, got %+v", skills)
+	}
+	if _, err := os.Stat(filepath.Join(foo.Dir, "helper.sh")); err != nil {
+		t.Fatalf("want helper.sh preserved in the imported skill (seen by one tool via a symlinked skill folder, another via the real path): %v", err)
 	}
 }

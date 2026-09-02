@@ -99,7 +99,10 @@ func RunImport(v *vault.Vault, sources []Source, ctx ImportCtx, opt Options) (Im
 		}
 	}
 
-	kept, deduped := dedupCandidates(candidates)
+	kept, deduped, err := dedupCandidates(candidates, v)
+	if err != nil {
+		return result, err
+	}
 	result.Deduped = append(result.Deduped, deduped...)
 
 	kept, dedupedVault, err := dedupAgainstVault(kept, v)
@@ -109,14 +112,23 @@ func RunImport(v *vault.Vault, sources []Source, ctx ImportCtx, opt Options) (Im
 	result.Deduped = append(result.Deduped, dedupedVault...)
 
 	if opt.DryRun {
+		// Preview exactly what the real write loop below would do:
+		// an item validateItem would refuse — an invalid name, or a
+		// name colliding with a different-content vault item — is
+		// skipped and warned about here too, never shown as
+		// importable.
 		for _, it := range kept {
+			if warn := validateItem(v, it); warn != nil {
+				result.Skipped = append(result.Skipped, *warn)
+				continue
+			}
 			result.Imported = append(result.Imported, ItemRef{Kind: it.kind, Name: it.name, Tool: it.tool})
 		}
 		return result, nil
 	}
 
 	for _, it := range kept {
-		ref, warn, err := writeItem(v, it)
+		ref, warn, fileWarnings, err := writeItem(v, it)
 		if err != nil {
 			return result, err
 		}
@@ -124,6 +136,7 @@ func RunImport(v *vault.Vault, sources []Source, ctx ImportCtx, opt Options) (Im
 			result.Skipped = append(result.Skipped, *warn)
 			continue
 		}
+		result.Warnings = append(result.Warnings, fileWarnings...)
 		result.Imported = append(result.Imported, ref)
 	}
 

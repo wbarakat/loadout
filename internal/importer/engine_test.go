@@ -317,3 +317,56 @@ func TestRunImportDryRunWritesNothing(t *testing.T) {
 		t.Fatalf("a dry run must not create any fact, got %+v", facts)
 	}
 }
+
+// TestRunImportDryRunSkipsInvalidNameLikeARealRun is the I1
+// regression test: a real write refuses an invalid vault name (via
+// vault.ValidName), but the old DryRun preview applied no such check
+// and would have listed it as importable anyway.
+func TestRunImportDryRunSkipsInvalidNameLikeARealRun(t *testing.T) {
+	v := newEngineTestVault(t)
+	src := &fakeSource{
+		name:    "faketool",
+		present: true,
+		skills:  []importer.CandidateSkill{{Name: "skill/../../escape", Description: "d", Body: "x", Tool: "faketool"}},
+	}
+	ctx := importer.ImportCtx{VaultRoot: v.Root, VaultSkillsDir: v.SkillsDir()}
+
+	result, err := importer.RunImport(v, []importer.Source{src}, ctx, importer.Options{Skills: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Imported) != 0 {
+		t.Fatalf("an invalid name must not be previewed as importable, got %+v", result.Imported)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("an invalid name must be recorded as skipped in a dry run, the same as a real run, got %+v", result)
+	}
+}
+
+// TestRunImportDryRunSkipsVaultNameCollisionLikeARealRun is the other
+// half of the I1 fix: a name that collides with an existing,
+// different-content vault item must be skipped in the preview too,
+// not shown as importable only to be refused by a real run.
+func TestRunImportDryRunSkipsVaultNameCollisionLikeARealRun(t *testing.T) {
+	v := newEngineTestVault(t)
+	if _, err := vault.WriteFactContent(v, "my-stack", "d", "user", "existing content", "human", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeSource{
+		name:    "faketool",
+		present: true,
+		facts:   []importer.CandidateFact{{Name: "my-stack", Description: "d", Type: "user", Body: "different content", Tool: "faketool"}},
+	}
+	ctx := importer.ImportCtx{VaultRoot: v.Root, VaultSkillsDir: v.SkillsDir()}
+
+	result, err := importer.RunImport(v, []importer.Source{src}, ctx, importer.Options{Memory: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Imported) != 0 {
+		t.Fatalf("a name colliding with an existing, different-content vault item must not be previewed as importable, got %+v", result.Imported)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("want the collision recorded as skipped in the dry run, the same as a real run, got %+v", result)
+	}
+}

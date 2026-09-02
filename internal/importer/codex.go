@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // Codex is the import Source for OpenAI Codex CLI's own on-disk
@@ -107,10 +106,7 @@ func scanCodexUserSkills(root, vaultSkillsDir string) ([]CandidateSkill, []Warni
 			continue
 		}
 		s, w := scanSkillEntry(filepath.Join(skillsDir, e.Name()), "codex", vaultSkillsDir)
-		if w != nil {
-			warnings = append(warnings, *w)
-			continue
-		}
+		warnings = append(warnings, w...)
 		if s != nil {
 			skills = append(skills, *s)
 		}
@@ -225,10 +221,24 @@ func (Codex) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 // Loadout's own managed block, and splits what is left into one fact
 // per top-level "##" section (or one fact for the whole file when it
 // has no such heading) — the same split readClaudeMDFile applies. A
-// damaged block skips the file with a warning; a body left empty
-// after stripping (Loadout's own projection, nothing native left to
-// recover) skips it without one.
+// file over maxMemoryFileSize — the same 4MiB cap Claude Code applies
+// to its own memory files — is skipped with a warning rather than
+// read and imported as one giant fact. A damaged block skips the file
+// with a warning; a body left empty after stripping (Loadout's own
+// projection, nothing native left to recover) skips it without one.
 func readCodexAgentsFile(path, base, factType string) ([]CandidateFact, []Warning) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, []Warning{{Tool: "codex", Path: path, Reason: "the file could not be read: " + err.Error()}}
+	}
+	if info.Size() > maxMemoryFileSize {
+		return nil, []Warning{{
+			Tool:   "codex",
+			Path:   path,
+			Reason: "this file is larger than 4MiB, the same limit Claude Code applies to its own memory files. Fix: split it into smaller files.",
+		}}
+	}
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, []Warning{{Tool: "codex", Path: path, Reason: "the file could not be read: " + err.Error()}}
@@ -247,10 +257,7 @@ func readCodexAgentsFile(path, base, factType string) ([]CandidateFact, []Warnin
 		return nil, nil
 	}
 
-	var modTime time.Time
-	if info, err := os.Stat(path); err == nil {
-		modTime = info.ModTime()
-	}
+	modTime := info.ModTime()
 
 	sections, structured := splitTopSections(native)
 	var facts []CandidateFact

@@ -2,6 +2,7 @@ package vault_test
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,33 @@ func TestAddSkillDefaultByIsKept(t *testing.T) {
 	}
 	if skills[0].By != "human" || skills[0].Review != "kept" {
 		t.Fatalf("a human write must be kept, got: %+v", skills[0])
+	}
+}
+
+// TestWriteSkillContentRejectsFilesKeyEscapingSkillDir is the IsLocal
+// guard regression test: a Files key holding a ".." element must
+// never write outside the skill folder, whatever wrote that key.
+func TestWriteSkillContentRejectsFilesKeyEscapingSkillDir(t *testing.T) {
+	v := newVault(t)
+	outsidePath := filepath.Join(v.Root, "evil-outside.txt")
+	files := map[string][]byte{
+		"../evil-outside.txt": []byte("must never land here"),
+		"safe.txt":            []byte("an ordinary support file"),
+	}
+
+	path, skipped, err := vault.WriteSkillContent(v, "my-skill", "d", "body", "human", time.Now(), files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(outsidePath); err == nil {
+		t.Fatal("a Files key containing .. must never write outside the skill folder")
+	}
+	if len(skipped) != 1 || skipped[0] != "../evil-outside.txt" {
+		t.Fatalf("want the escaping key reported as skipped, got %+v", skipped)
+	}
+	skillDir := filepath.Dir(path)
+	if _, err := os.Stat(filepath.Join(skillDir, "safe.txt")); err != nil {
+		t.Fatalf("an ordinary, local Files key must still write, got %v", err)
 	}
 }
 

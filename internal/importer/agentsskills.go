@@ -36,10 +36,7 @@ func scanAgentsSkills(dirs []string, tool string, ctx ImportCtx) ([]CandidateSki
 		}
 		for _, e := range entries {
 			s, w := scanSkillEntry(filepath.Join(dir, e.Name()), tool, ctx.VaultSkillsDir)
-			if w != nil {
-				warnings = append(warnings, *w)
-				continue
-			}
+			warnings = append(warnings, w...)
 			if s != nil {
 				skills = append(skills, *s)
 			}
@@ -55,45 +52,60 @@ func scanAgentsSkills(dirs []string, tool string, ctx ImportCtx) ([]CandidateSki
 // back as a Warning, never an error, so one bad entry never stops the
 // rest of a scan: a dangling symlink, a non-directory entry, a
 // missing or unreadable SKILL.md, or a SKILL.md with no valid
-// frontmatter.
-func scanSkillEntry(entryPath, tool, vaultSkillsDir string) (*CandidateSkill, *Warning) {
+// frontmatter. A returned skill can still carry its own warnings — a
+// support file symlink escaping the skill folder, for example —
+// alongside it, so those never get lost just because the skill itself
+// imported fine.
+func scanSkillEntry(entryPath, tool, vaultSkillsDir string) (*CandidateSkill, []Warning) {
 	owned, err := IsVaultOwnedSkill(entryPath, vaultSkillsDir)
 	if err != nil {
-		return nil, &Warning{
+		return nil, []Warning{{
 			Tool:   tool,
 			Path:   entryPath,
 			Reason: "this skill link is dangling and does not resolve. Fix: remove the link, or point it at a real skill.",
-		}
+		}}
 	}
 	if owned {
 		return nil, nil
 	}
 
-	info, err := os.Stat(entryPath)
+	// Resolve the skill folder to its REAL path before reading
+	// anything from it — see collectSkillFiles for why this matters
+	// for a symlinked skill folder's support files.
+	realPath, err := filepath.EvalSymlinks(entryPath)
+	if err != nil {
+		return nil, []Warning{{
+			Tool:   tool,
+			Path:   entryPath,
+			Reason: "this skill link is dangling and does not resolve. Fix: remove the link, or point it at a real skill.",
+		}}
+	}
+
+	info, err := os.Stat(realPath)
 	if err != nil || !info.IsDir() {
-		return nil, &Warning{
+		return nil, []Warning{{
 			Tool:   tool,
 			Path:   entryPath,
 			Reason: "this is not a skill folder. Fix: a skill must be a directory holding a SKILL.md file.",
-		}
+		}}
 	}
 
-	skillMDPath := filepath.Join(entryPath, "SKILL.md")
+	skillMDPath := filepath.Join(realPath, "SKILL.md")
 	raw, err := os.ReadFile(skillMDPath)
 	if err != nil {
-		return nil, &Warning{
+		return nil, []Warning{{
 			Tool:   tool,
 			Path:   entryPath,
 			Reason: "no readable SKILL.md file. Fix: add a SKILL.md file, or remove the folder.",
-		}
+		}}
 	}
 	name, description, body, ok := parseSkillFrontmatter(raw)
 	if !ok {
-		return nil, &Warning{
+		return nil, []Warning{{
 			Tool:   tool,
 			Path:   skillMDPath,
 			Reason: "no valid frontmatter. Fix: add a --- block with a name field.",
-		}
+		}}
 	}
 
 	modTime := info.ModTime()
@@ -101,12 +113,14 @@ func scanSkillEntry(entryPath, tool, vaultSkillsDir string) (*CandidateSkill, *W
 		modTime = st.ModTime()
 	}
 
+	files, fileWarnings := collectSkillFiles(realPath, tool)
+
 	return &CandidateSkill{
 		Name:        name,
 		Description: description,
 		Body:        body,
-		Files:       collectSkillFiles(entryPath),
+		Files:       files,
 		Tool:        tool,
 		ModTime:     modTime,
-	}, nil
+	}, fileWarnings
 }
