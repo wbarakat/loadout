@@ -11,15 +11,21 @@ import (
 	"loadout.dev/loadout/internal/vault"
 )
 
-const importUsage = "usage: loadout import [SOURCE...] [--skills] [--memory] [--project DIR] [--project-memory] [--dry-run]"
+const importUsage = "usage: loadout import [SOURCE...] [--skills] [--memory] [--project DIR] [--project-memory] [--dry-run]\n" +
+	"SOURCE is one of: claude-code, codex, cursor, hermes, pi, gemini, droid."
 
 // importRegistry lists every import Source loadout knows, in the
-// order "loadout import" tries them. v1 holds claude-code and codex;
-// a later phase adds more sources here, and nothing else in this file
-// needs to change.
+// order "loadout import" tries them and the report prints them. No
+// SOURCE on the command line runs every registered source and lets
+// RunImport's own Detect skip whichever one is not actually installed.
 var importRegistry = []importer.Source{
 	importer.ClaudeCode{},
 	importer.Codex{},
+	importer.Cursor{},
+	importer.Hermes{},
+	importer.Pi{},
+	importer.Gemini{},
+	importer.Droid{},
 }
 
 // importSourceNames names every source in importRegistry, in

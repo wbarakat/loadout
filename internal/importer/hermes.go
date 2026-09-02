@@ -303,6 +303,13 @@ func splitHermesChunks(text string) []string {
 // the same per-project/opt-in rule Skills applies to a profile's own
 // skills (see Skills's own doc comment): a profile is a fragment of
 // one Hermes install, not the tool's global memory.
+//
+// When ctx.ProjectMemory is off and one or more profiles exist
+// anyway, this warns how many were skipped — the same
+// "N per-project memory sources skipped; pass --project-memory to
+// include them" shape Gemini's and Droid's own Memory methods already
+// report, so the report reads the same way across every source that
+// has an off-by-default, per-project or per-profile scope.
 func (Hermes) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 	root := hermesRoot(ctx)
 
@@ -315,6 +322,11 @@ func (Hermes) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 			facts = append(facts, pFacts...)
 			warnings = append(warnings, pWarnings...)
 		}
+	} else if n := len(hermesProfileNames(root)); n > 0 {
+		warnings = append(warnings, Warning{
+			Tool:   "hermes",
+			Reason: fmt.Sprintf("%d per-project memory sources skipped; pass --project-memory to include them.", n),
+		})
 	}
 
 	return facts, warnings, nil

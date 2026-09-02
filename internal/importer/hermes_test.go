@@ -405,6 +405,45 @@ func TestHermesMemoryProfileOnlyUnderProjectMemory(t *testing.T) {
 	}
 }
 
+// TestHermesMemoryDefaultWarnsProfilesSkipped is the parity test for
+// the fix noted in Task 4's own review: Gemini's and Droid's Memory
+// methods already warn "N per-project memory sources skipped; pass
+// --project-memory to include them" when ProjectMemory is off and a
+// per-project source exists anyway. Hermes's own profiles are the
+// same kind of off-by-default surface, so its Memory method must warn
+// the same way whenever ~/.hermes/profiles holds at least one profile
+// (the fixture's own "brain") and ProjectMemory is false.
+func TestHermesMemoryDefaultWarnsProfilesSkipped(t *testing.T) {
+	home, vaultSkillsDir := setupHermesHome(t)
+	src := importer.Hermes{}
+
+	_, warnings, err := src.Memory(importer.ImportCtx{Home: home, VaultSkillsDir: vaultSkillsDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawSkipNote bool
+	for _, w := range warnings {
+		if strings.Contains(w.Reason, "per-project memory") && strings.Contains(w.Reason, "--project-memory") {
+			sawSkipNote = true
+		}
+	}
+	if !sawSkipNote {
+		t.Fatalf("want a warning naming --project-memory when a profile exists but is skipped, got %+v", warnings)
+	}
+
+	// With ProjectMemory true, the same warning must not appear —
+	// nothing was skipped, the profile scan actually ran.
+	_, warnings, err = src.Memory(importer.ImportCtx{Home: home, VaultSkillsDir: vaultSkillsDir, ProjectMemory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w.Reason, "per-project memory") && strings.Contains(w.Reason, "--project-memory") {
+			t.Fatalf("want no skipped-profile warning once ProjectMemory is true, got %+v", warnings)
+		}
+	}
+}
+
 // TestHermesNeverReadsConfigYaml is the secret-safety check: the
 // fixture's config.yaml carries a sentinel token nowhere else in the
 // fixture. A full RunImport, skills and memory both, with

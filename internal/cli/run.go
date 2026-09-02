@@ -33,10 +33,16 @@ commands:
   import [SOURCE...] [--skills] [--memory] [--project DIR]
          [--project-memory] [--dry-run]
                              pull skills and memory from installed agent tools
-                             (claude-code, codex) into the vault as drafts.
+                             (claude-code, codex, cursor, hermes, pi, gemini,
+                             droid) into the vault as drafts.
                              Memory defaults to GLOBAL instruction files only.
-                             Pass --project-memory to also pull per-project
-                             memory for --project DIR, or the current directory
+                             Pass --project-memory to also pull per-project or
+                             per-profile memory for --project DIR, or the
+                             current directory.
+                             Devin is hosted. Loadout cannot import it from
+                             this device.
+                             Cursor keeps global User Rules in an internal
+                             database. Loadout cannot import them.
   review                     list draft items awaiting review
   review keep KIND/NAME      mark a draft item kept
   review drop KIND/NAME      delete a draft item
