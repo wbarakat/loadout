@@ -1,0 +1,2 @@
+This is a stale leftover directory from an old Cursor version. It
+holds no SKILL.md file, so it must never import as a skill.
