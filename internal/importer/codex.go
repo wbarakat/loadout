@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,11 +178,16 @@ func codexAgentsFileIn(dir string) (path string, ok bool) {
 }
 
 // Memory returns candidate facts from the AGENTS.md chain: the
-// global file at the codex root, plus — when ctx.ProjectDir is set —
-// one file per directory from the project's repo root down to
-// ProjectDir. Codex's own AGENTS.md holds the FULL rendered memory
-// inside Loadout's marks (memoryBlock mode, source map §2) — this
-// strips that block first, and imports only what is left outside it.
+// global file at the codex root always, plus — only when
+// ctx.ProjectMemory is set, and ctx.ProjectDir is too — one file per
+// directory from the project's repo root down to ProjectDir. Codex's
+// own AGENTS.md holds the FULL rendered memory inside Loadout's marks
+// (memoryBlock mode, source map §2) — this strips that block first,
+// and imports only what is left outside it.
+//
+// FIX 4: the project chain is per-project OPT-IN — see
+// countCodexSkippedProjectMemory and claudecode.go's own Memory,
+// which documents the shared default.
 func (Codex) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 	root := codexRoot(ctx)
 
@@ -194,7 +200,7 @@ func (Codex) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 		warnings = append(warnings, w...)
 	}
 
-	if ctx.ProjectDir != "" {
+	if ctx.ProjectMemory && ctx.ProjectDir != "" {
 		dirs := projectAgentsDirs(ctx.ProjectDir)
 		top := dirs[0]
 		for _, dir := range dirs {
@@ -212,9 +218,32 @@ func (Codex) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 			facts = append(facts, f...)
 			warnings = append(warnings, w...)
 		}
+	} else if !ctx.ProjectMemory {
+		if n := countCodexSkippedProjectMemory(ctx); n > 0 {
+			warnings = append(warnings, Warning{
+				Tool:   "codex",
+				Reason: fmt.Sprintf("%d per-project memory sources skipped; pass --project-memory to include them.", n),
+			})
+		}
 	}
 
 	return facts, warnings, nil
+}
+
+// countCodexSkippedProjectMemory reports how many directories in
+// ctx.ProjectDir's own AGENTS chain (repo root down to ProjectDir)
+// hold an AGENTS.md/AGENTS.override.md file, without opening any of
+// them — used only to report how many per-project sources
+// --project-memory would add when it is not set. An empty
+// ctx.ProjectDir yields 0, matching projectAgentsDirs' own rule.
+func countCodexSkippedProjectMemory(ctx ImportCtx) int {
+	n := 0
+	for _, dir := range projectAgentsDirs(ctx.ProjectDir) {
+		if _, ok := codexAgentsFileIn(dir); ok {
+			n++
+		}
+	}
+	return n
 }
 
 // readCodexAgentsFile reads one AGENTS.md-shaped file, strips

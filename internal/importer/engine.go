@@ -127,10 +127,17 @@ func RunImport(v *vault.Vault, sources []Source, ctx ImportCtx, opt Options) (Im
 		return result, nil
 	}
 
+	// FIX 3: a single item the vault refuses to write must never abort
+	// the run and lose every other item still waiting to write. writeItem
+	// already turns most write problems into warn rather than err; the
+	// err branch below is the last-resort net for anything that still
+	// slips through as a genuine error — it is recorded as a skip+warn,
+	// the very same shape warn already gets, and the loop continues.
 	for _, it := range kept {
 		ref, warn, fileWarnings, err := writeItem(v, it)
 		if err != nil {
-			return result, err
+			result.Skipped = append(result.Skipped, Warning{Tool: it.tool, Path: it.name, Reason: err.Error()})
+			continue
 		}
 		if warn != nil {
 			result.Skipped = append(result.Skipped, *warn)

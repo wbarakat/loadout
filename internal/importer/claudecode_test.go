@@ -1,6 +1,7 @@
 package importer_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,11 +125,18 @@ func TestClaudeCodeNameIsClaudeCode(t *testing.T) {
 // review: draft. It also checks the three exclusions and the dangling
 // symlink all land as expected: silently for the two exclusions,
 // skip+warn for the dangling link.
+//
+// ProjectMemory: true is set here because of FIX 4: the auto-memory
+// fact this test checks (proj1-note) is per-project memory, which is
+// now opt-in rather than imported by default. This test's own purpose
+// is exercising the engine's full behavior end to end, not the
+// default-scope question — see
+// TestClaudeCodeMemoryDefaultExcludesProjectAndAutoMemory for that.
 func TestClaudeCodeFullImportViaEngine(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home, vaultSkillsDir := setupClaudeHome(t)
 	v := newClaudeCodeTestVault(t)
-	ctx := importer.ImportCtx{Home: home, VaultRoot: v.Root, VaultSkillsDir: vaultSkillsDir}
+	ctx := importer.ImportCtx{Home: home, VaultRoot: v.Root, VaultSkillsDir: vaultSkillsDir, ProjectMemory: true}
 	src := importer.ClaudeCode{}
 
 	result, err := importer.RunImport(v, []importer.Source{src}, ctx, importer.Options{Skills: true, Memory: true})
@@ -539,6 +547,11 @@ func TestClaudeCodeMemorySkipsOversizedFileWithWarning(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeMemoryProjectClaudeMDHierarchy sets ProjectMemory:
+// true, since FIX 4 made the project CLAUDE.md hierarchy per-project
+// memory — opt-in, not imported by default. See
+// TestClaudeCodeMemoryDefaultExcludesProjectAndAutoMemory for the
+// default-off case this test used to (accidentally) exercise.
 func TestClaudeCodeMemoryProjectClaudeMDHierarchy(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home := t.TempDir()
@@ -560,7 +573,7 @@ func TestClaudeCodeMemoryProjectClaudeMDHierarchy(t *testing.T) {
 	}
 	src := importer.ClaudeCode{}
 
-	facts, _, err := src.Memory(importer.ImportCtx{Home: home, ProjectDir: project})
+	facts, _, err := src.Memory(importer.ImportCtx{Home: home, ProjectDir: project, ProjectMemory: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,12 +588,17 @@ func TestClaudeCodeMemoryProjectClaudeMDHierarchy(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeMemoryAutoMemoryCarriesTypeAndSkipsIndex sets
+// ProjectMemory: true, since FIX 4 made the auto-memory vault
+// per-project memory — opt-in, not scanned by default. See
+// TestClaudeCodeMemoryDefaultExcludesProjectAndAutoMemory for the
+// default-off case.
 func TestClaudeCodeMemoryAutoMemoryCarriesTypeAndSkipsIndex(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home, _ := setupClaudeHome(t)
 	src := importer.ClaudeCode{}
 
-	facts, _, err := src.Memory(importer.ImportCtx{Home: home})
+	facts, _, err := src.Memory(importer.ImportCtx{Home: home, ProjectMemory: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,5 +642,232 @@ func TestClaudeCodeConfigDirOverridesHome(t *testing.T) {
 	}
 	if len(skills) != 1 || skills[0].Name != "overridetool" {
 		t.Fatalf("want the skill found under CLAUDE_CONFIG_DIR, got %+v", skills)
+	}
+}
+
+// TestClaudeCodeSkillsExcludesVCSAndBuildDirsEndToEnd is the FIX 1
+// regression test: a real "skill" was a symlink to a source REPO, so
+// its .git (11MB) and .venv both got copied wholesale into the vault,
+// and the vault's own nested .git broke its own git history. A skill
+// folder holding SKILL.md, a real support file, a .git dir, a .venv
+// dir, and a node_modules dir must import with only the real support
+// file — none of the excluded dirs' content anywhere in the vault.
+func TestClaudeCodeSkillsExcludesVCSAndBuildDirsEndToEnd(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	root := filepath.Join(home, ".claude")
+	skillDir := filepath.Join(root, "skills", "reposkill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: reposkill\ndescription: a skill folder that is really a repo checkout\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "helper.sh"), []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(skillDir, ".git", "objects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, ".git", "HEAD"), []byte("SENTINEL-GIT-HEAD-CONTENT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(skillDir, ".venv", "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, ".venv", "lib", "somelib.py"), []byte("venv contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(skillDir, "node_modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "node_modules", "x"), []byte("npm dep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	v := newClaudeCodeTestVault(t)
+	ctx := importer.ImportCtx{Home: home, VaultRoot: v.Root, VaultSkillsDir: v.SkillsDir()}
+
+	if _, err := importer.RunImport(v, []importer.Source{importer.ClaudeCode{}}, ctx, importer.Options{Skills: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reposkill *vault.Skill
+	for i := range skills {
+		if skills[i].Name == "reposkill" {
+			reposkill = &skills[i]
+		}
+	}
+	if reposkill == nil {
+		t.Fatalf("want reposkill imported, got %+v", skills)
+	}
+	if _, err := os.Stat(filepath.Join(reposkill.Dir, "helper.sh")); err != nil {
+		t.Fatalf("want helper.sh copied alongside SKILL.md: %v", err)
+	}
+	for _, excluded := range []string{".git", ".venv", "node_modules"} {
+		if _, err := os.Stat(filepath.Join(reposkill.Dir, excluded)); err == nil {
+			t.Fatalf("a nested %s directory must never be copied into the vault", excluded)
+		}
+	}
+
+	// Belt and braces: none of the excluded content's own bytes must
+	// appear anywhere in the vault (the vault has its own top-level
+	// .git from vault.Init, so this checks content, not directory
+	// names, to avoid mistaking that for a violation).
+	sentinels := []string{"venv contents", "npm dep", "SENTINEL-GIT-HEAD-CONTENT"}
+	walkErr := filepath.WalkDir(v.Root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		for _, s := range sentinels {
+			if strings.Contains(string(data), s) {
+				t.Fatalf("excluded dir content leaked into the vault at %s", path)
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatal(walkErr)
+	}
+}
+
+// TestClaudeCodeSkillsSkipsOversizedSkillWithWarning is the FIX 2
+// regression test: a 27MB "skill" (hallmark) imported wholesale. A
+// skill whose total collected content — SKILL.md plus every support
+// file, after FIX 1's exclusions — exceeds the per-skill cap must be
+// skipped WHOLE, with a "too large" warning, never imported; a normal
+// small skill must still import fine in the very same run.
+func TestClaudeCodeSkillsSkipsOversizedSkillWithWarning(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	root := filepath.Join(home, ".claude")
+
+	bigDir := filepath.Join(root, "skills", "hallmark")
+	if err := os.MkdirAll(bigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bigDir, "SKILL.md"), []byte("---\nname: hallmark\ndescription: a skill folder much too large to import\n---\n\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chunk := make([]byte, 800*1024)
+	for i := 0; i < 3; i++ {
+		if err := os.WriteFile(filepath.Join(bigDir, fmt.Sprintf("part%d.bin", i)), chunk, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	smallDir := filepath.Join(root, "skills", "normal")
+	if err := os.MkdirAll(smallDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(smallDir, "SKILL.md"), []byte("---\nname: normal\ndescription: an ordinary small skill\n---\n\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	v := newClaudeCodeTestVault(t)
+	ctx := importer.ImportCtx{Home: home, VaultRoot: v.Root, VaultSkillsDir: v.SkillsDir()}
+
+	result, err := importer.RunImport(v, []importer.Source{importer.ClaudeCode{}}, ctx, importer.Options{Skills: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]bool{}
+	for _, s := range skills {
+		byName[s.Name] = true
+	}
+	if byName["hallmark"] {
+		t.Fatalf("an oversized skill must never import, got %+v", skills)
+	}
+	if !byName["normal"] {
+		t.Fatalf("a normal small skill must still import in the same run, got %+v", skills)
+	}
+
+	found := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w.Reason, "too large") && strings.Contains(w.Reason, "hallmark") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want a 'too large' warning naming hallmark, got %+v", result.Warnings)
+	}
+}
+
+// TestClaudeCodeMemoryDefaultExcludesProjectAndAutoMemory is the FIX
+// 4 regression test: "loadout import" (memory) used to glob ALL
+// projects' auto-memory plus project CLAUDE.md/AGENTS.md by default,
+// flooding the vault with per-project work notes. The default must
+// now import GLOBAL memory only (the user's own CLAUDE.md); the
+// per-project CLAUDE.md hierarchy and the auto-memory vault must
+// import only with ProjectMemory: true.
+func TestClaudeCodeMemoryDefaultExcludesProjectAndAutoMemory(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, _ := setupClaudeHome(t)
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "CLAUDE.md"), []byte("Root project note.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := importer.ClaudeCode{}
+
+	// Default: ProjectMemory is false (the zero value).
+	facts, warnings, err := src.Memory(importer.ImportCtx{Home: home, ProjectDir: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range facts {
+		if f.Name == "proj1-note" {
+			t.Fatalf("the default must not import per-project auto-memory, got %+v", facts)
+		}
+		if f.Name == "claude-md-project" {
+			t.Fatalf("the default must not import the project CLAUDE.md, got %+v", facts)
+		}
+	}
+	var sawGlobal bool
+	for _, f := range facts {
+		if f.Name == "claude-md" {
+			sawGlobal = true
+		}
+	}
+	if !sawGlobal {
+		t.Fatalf("the default must still import the GLOBAL CLAUDE.md, got %+v", facts)
+	}
+	var sawSkipNote bool
+	for _, w := range warnings {
+		if strings.Contains(w.Reason, "per-project memory") && strings.Contains(w.Reason, "--project-memory") {
+			sawSkipNote = true
+		}
+	}
+	if !sawSkipNote {
+		t.Fatalf("want a warning naming --project-memory when per-project sources exist but are skipped, got %+v", warnings)
+	}
+
+	// --project-memory: both the global and the per-project sources
+	// import.
+	facts, _, err = src.Memory(importer.ImportCtx{Home: home, ProjectDir: project, ProjectMemory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]bool{}
+	for _, f := range facts {
+		byName[f.Name] = true
+	}
+	for _, want := range []string{"claude-md", "proj1-note", "claude-md-project"} {
+		if !byName[want] {
+			t.Fatalf("with --project-memory want a fact named %q, got %+v", want, facts)
+		}
 	}
 }

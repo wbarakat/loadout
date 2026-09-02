@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,5 +123,162 @@ func TestScanAgentsSkillsDedupesRepeatedDir(t *testing.T) {
 	skills, _ := scanAgentsSkills([]string{dir, dir}, "codex", ImportCtx{VaultSkillsDir: filepath.Join(t.TempDir(), "vault-skills")})
 	if len(skills) != 1 {
 		t.Fatalf("the same dir listed twice must only be scanned once, got %+v", skills)
+	}
+}
+
+// keysOf returns the keys of a files map, for a readable failure
+// message (the values are raw file bytes, not worth printing).
+func keysOf(files map[string][]byte) []string {
+	keys := make([]string, 0, len(files))
+	for k := range files {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// realTempDir returns a fresh temp dir with every symlink in its own
+// path already resolved — macOS aliases /tmp (and t.TempDir()'s own
+// /var/folders) to /private/..., so a raw t.TempDir() does not equal
+// its own filepath.EvalSymlinks result. collectSkillFiles is always
+// called by production code with an already-resolved skill folder
+// path (scanSkillEntry/scanSkillsDir both resolve via EvalSymlinks
+// before calling it); a test calling it directly must do the same, or
+// its own containment check (isWithinDir) sees a false escape.
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestCollectSkillFilesExcludesVCSAndBuildDirs is the FIX 1
+// regression test, at the collectSkillFiles level: a skill folder
+// holding SKILL.md (never collected — collectSkillFiles always
+// excludes it), a real support file, a .git dir, a .venv dir, and a
+// node_modules dir. Only the real support file must be collected;
+// none of the excluded dirs' files, silently — no warning either,
+// since pruning a VCS/build dir is expected, not a problem.
+func TestCollectSkillFilesExcludesVCSAndBuildDirs(t *testing.T) {
+	dir := realTempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: x\ndescription: d\n---\n\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "helper.sh"), []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".git", "objects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "objects", "pack-data"), []byte("git internals"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".venv", "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".venv", "lib", "somelib.py"), []byte("venv contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "x"), []byte("npm dep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, warnings := collectSkillFiles(dir, "test")
+	if len(warnings) != 0 {
+		t.Fatalf("excluding a VCS/build dir is silent, want no warnings, got %+v", warnings)
+	}
+	if len(files) != 1 {
+		t.Fatalf("want only helper.sh collected, got %+v", keysOf(files))
+	}
+	if _, ok := files["helper.sh"]; !ok {
+		t.Fatalf("want helper.sh collected, got %+v", keysOf(files))
+	}
+	for rel := range files {
+		if strings.Contains(rel, ".git") || strings.Contains(rel, ".venv") || strings.Contains(rel, "node_modules") {
+			t.Fatalf("an excluded dir's file must never be collected, got key %q", rel)
+		}
+	}
+}
+
+// TestCollectSkillFilesSkipsOversizedSupportFileWithWarning is the
+// per-file half of FIX 2: a single support file over the per-file
+// limit is dropped with its own warning — never copied into the
+// vault — while a normal-size sibling file still collects.
+func TestCollectSkillFilesSkipsOversizedSupportFileWithWarning(t *testing.T) {
+	dir := realTempDir(t)
+	big := make([]byte, maxSkillSupportFileBytes+1)
+	if err := os.WriteFile(filepath.Join(dir, "huge.bin"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "small.txt"), []byte("fits fine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, warnings := collectSkillFiles(dir, "test")
+	if _, ok := files["huge.bin"]; ok {
+		t.Fatalf("an oversized support file must not be collected, got %+v", keysOf(files))
+	}
+	if _, ok := files["small.txt"]; !ok {
+		t.Fatalf("a normal support file must still be collected, got %+v", keysOf(files))
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("want 1 warning for the oversized file, got %+v", warnings)
+	}
+}
+
+// TestScanSkillEntrySkipsSkillOverSizeCapWithWarning is the
+// whole-skill half of FIX 2: a real "skill" (hallmark) was 27MB and
+// imported wholesale. Several support files, none individually over
+// the per-file limit, whose SUM exceeds the per-skill cap must skip
+// the whole skill, with a "too large" warning, rather than import it.
+func TestScanSkillEntrySkipsSkillOverSizeCapWithWarning(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: too-big\ndescription: d\n---\n\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chunk := make([]byte, 800*1024)
+	for i := 0; i < 3; i++ {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("part%d.bin", i)), chunk, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s, warnings := scanSkillEntry(dir, "test", filepath.Join(t.TempDir(), "vault-skills"))
+	if s != nil {
+		t.Fatalf("a skill over the total size cap must be skipped whole, got %+v", s)
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w.Reason, "too large") && strings.Contains(w.Reason, "too-big") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want a 'too large' warning naming the skill, got %+v", warnings)
+	}
+}
+
+// TestScanSkillEntryNormalSmallSkillStillImports checks the other
+// half of FIX 2's own test requirement: a normal small skill, well
+// under both caps, must import cleanly with no warnings.
+func TestScanSkillEntryNormalSmallSkillStillImports(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: normal\ndescription: d\n---\n\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "helper.sh"), []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, warnings := scanSkillEntry(dir, "test", filepath.Join(t.TempDir(), "vault-skills"))
+	if len(warnings) != 0 {
+		t.Fatalf("want no warnings for a normal small skill, got %+v", warnings)
+	}
+	if s == nil || s.Name != "normal" {
+		t.Fatalf("want the normal skill imported, got %+v", s)
 	}
 }

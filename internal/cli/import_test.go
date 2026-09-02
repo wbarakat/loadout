@@ -230,10 +230,17 @@ func TestImportDryRunWritesNothing(t *testing.T) {
 	}
 }
 
+// TestImportWritesDraftItems passes --project-memory so its existing
+// assertion that proj1-note (per-project auto-memory) imports still
+// holds: FIX 4 moved per-project memory behind that flag, opt-in
+// rather than the default. See TestImportMemoryDefaultIsGlobalOnly
+// for the default-off behavior this test used to (accidentally)
+// exercise, and TestImportProjectMemoryFlagIncludesPerProjectMemory
+// for the flag's own dedicated test.
 func TestImportWritesDraftItems(t *testing.T) {
 	_, vaultRoot, projectDir := setupImportFixture(t)
 
-	out, errOut, code := run(t, "import", "--project", projectDir)
+	out, errOut, code := run(t, "import", "--project", projectDir, "--project-memory")
 	if code != 0 {
 		t.Fatalf("import failed: %s", errOut)
 	}
@@ -299,6 +306,60 @@ func TestImportWritesDraftItems(t *testing.T) {
 	}
 	if !strings.Contains(out, "loadout sync --remote") {
 		t.Fatalf("want the report to name the sync next step, got %q", out)
+	}
+}
+
+// TestImportMemoryDefaultIsGlobalOnly is the FIX 4 regression test:
+// "loadout import" (memory) used to glob ALL projects' auto-memory by
+// default, flooding the vault with per-project work notes. Without
+// --project-memory, the default must import only the global CLAUDE.md
+// fact, never the fixture's proj1-note auto-memory fact.
+func TestImportMemoryDefaultIsGlobalOnly(t *testing.T) {
+	_, vaultRoot, projectDir := setupImportFixture(t)
+
+	if _, errOut, code := run(t, "import", "--project", projectDir); code != 0 {
+		t.Fatalf("import failed: %s", errOut)
+	}
+
+	v, err := vault.Open(vaultRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := factNamed(facts, "claude-md"); !ok {
+		t.Fatalf("want the global CLAUDE.md fact imported by default, got %+v", facts)
+	}
+	if _, ok := factNamed(facts, "proj1-note"); ok {
+		t.Fatalf("want per-project auto-memory NOT imported by default (no --project-memory), got %+v", facts)
+	}
+}
+
+// TestImportProjectMemoryFlagIncludesPerProjectMemory is the other
+// half of the FIX 4 test: --project-memory pulls in the per-project
+// auto-memory fact alongside the global one.
+func TestImportProjectMemoryFlagIncludesPerProjectMemory(t *testing.T) {
+	_, vaultRoot, projectDir := setupImportFixture(t)
+
+	if _, errOut, code := run(t, "import", "--project", projectDir, "--project-memory"); code != 0 {
+		t.Fatalf("import --project-memory failed: %s", errOut)
+	}
+
+	v, err := vault.Open(vaultRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := factNamed(facts, "claude-md"); !ok {
+		t.Fatalf("want the global CLAUDE.md fact imported, got %+v", facts)
+	}
+	if _, ok := factNamed(facts, "proj1-note"); !ok {
+		t.Fatalf("want the per-project auto-memory fact imported with --project-memory, got %+v", facts)
 	}
 }
 

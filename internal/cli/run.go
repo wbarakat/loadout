@@ -30,9 +30,13 @@ commands:
   doctor                     find problems and show the fix for each one
   log                        show the vault history
   undo                       revert to the state before the last change
-  import [SOURCE...] [--skills] [--memory] [--project DIR] [--dry-run]
+  import [SOURCE...] [--skills] [--memory] [--project DIR]
+         [--project-memory] [--dry-run]
                              pull skills and memory from installed agent tools
-                             (claude-code, codex) into the vault as drafts
+                             (claude-code, codex) into the vault as drafts.
+                             Memory defaults to GLOBAL instruction files only.
+                             Pass --project-memory to also pull per-project
+                             memory for --project DIR, or the current directory
   review                     list draft items awaiting review
   review keep KIND/NAME      mark a draft item kept
   review drop KIND/NAME      delete a draft item

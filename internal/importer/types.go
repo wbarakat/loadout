@@ -30,6 +30,16 @@ type ImportCtx struct {
 	// also reads project-scoped content (a repo's own AGENTS.md, for
 	// example).
 	ProjectDir string
+	// ProjectMemory opts into per-project memory: the auto-memory
+	// vaults (~/.claude/projects/*/memory/*.md) and the project-scoped
+	// instruction files (project CLAUDE.md/.claude/CLAUDE.md/
+	// CLAUDE.local.md, project AGENTS.md) for ProjectDir. The CLI sets
+	// this from its own --project-memory flag. The default, false,
+	// scopes Memory to GLOBAL instruction files only (~/.claude/
+	// CLAUDE.md, ~/.codex/AGENTS.md) — a per-project auto-memory store
+	// holds per-project work notes that flood the vault when imported
+	// by default.
+	ProjectMemory bool
 }
 
 // CandidateSkill is one skill a Source found in a tool's native

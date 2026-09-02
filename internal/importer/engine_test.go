@@ -370,3 +370,62 @@ func TestRunImportDryRunSkipsVaultNameCollisionLikeARealRun(t *testing.T) {
 		t.Fatalf("want the collision recorded as skipped in the dry run, the same as a real run, got %+v", result)
 	}
 }
+
+// TestRunImportWriteFailureIsSkippedAndOthersStillWrite is the FIX 3
+// regression test: the real import ABORTED when the vault refused to
+// write one item (a folder with a nested .git). It made the vault's
+// own skills dir read-only after vault.Init, so a brand-new skill's
+// own os.MkdirAll fails with a permission error a beat AFTER
+// validateItem's own pre-write checks already passed (name is valid,
+// no same-name file yet exists) — the one class of write failure that
+// reaches writeItem's real vault.WriteSkillContent call, rather than
+// being caught early as a Skipped "bad name" or "already exists"
+// warning. Two good facts are written to the (still writable)
+// memory dir in the same run: RunImport must still return them as
+// Imported, record the bad skill as Skipped, and return no error —
+// never abort and lose the two good items.
+func TestRunImportWriteFailureIsSkippedAndOthersStillWrite(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory permission bits do not block root's own writes")
+	}
+	v := newEngineTestVault(t)
+	if err := os.Chmod(v.SkillsDir(), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(v.SkillsDir(), 0o755) })
+
+	src := &fakeSource{
+		name:    "faketool",
+		present: true,
+		skills: []importer.CandidateSkill{
+			{Name: "bad-skill", Description: "d", Body: "x", Tool: "faketool"},
+		},
+		facts: []importer.CandidateFact{
+			{Name: "good-fact-1", Description: "d", Type: "user", Body: "one", Tool: "faketool"},
+			{Name: "good-fact-2", Description: "d", Type: "user", Body: "two", Tool: "faketool"},
+		},
+	}
+	ctx := importer.ImportCtx{VaultRoot: v.Root, VaultSkillsDir: v.SkillsDir()}
+
+	result, err := importer.RunImport(v, []importer.Source{src}, ctx, importer.Options{Skills: true, Memory: true})
+	if err != nil {
+		t.Fatalf("a single bad write must never abort the run, got err=%v", err)
+	}
+	if len(result.Imported) != 2 {
+		t.Fatalf("want the two good facts imported despite the bad skill, got %+v", result)
+	}
+	if len(result.Skipped) != 1 {
+		t.Fatalf("want the bad skill recorded as skipped, got %+v", result)
+	}
+	if result.Skipped[0].Path != "bad-skill" {
+		t.Fatalf("want the skip to name bad-skill, got %+v", result.Skipped[0])
+	}
+
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 2 {
+		t.Fatalf("want both good facts actually written to disk, got %+v", facts)
+	}
+}

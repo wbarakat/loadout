@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,6 +16,77 @@ import (
 // than read and silently truncated differently than Claude Code would
 // have truncated it.
 const maxMemoryFileSize = 4 * 1024 * 1024
+
+// maxSkillBytes caps the TOTAL bytes one skill collects — its own
+// SKILL.md file plus every support file collectSkillFiles gathers,
+// after the VCS/build exclusions below. A real "skill" was once a
+// 27MB folder that imported wholesale; a skill over this cap is
+// skipped WHOLE, with a warning naming its size, rather than copied
+// into the vault regardless of size.
+const maxSkillBytes = 2 << 20 // 2 MiB
+
+// maxSkillSupportFileBytes caps one individual support file inside a
+// skill folder. A single file over this size — a vendored binary, a
+// data dump — is dropped with its own warning even when the skill as
+// a whole would otherwise fit under maxSkillBytes.
+const maxSkillSupportFileBytes = 1 << 20 // 1 MiB
+
+// excludedSkillDirNames names every directory collectSkillFiles must
+// never descend into or copy from: version-control internals and
+// build/dependency trees. A real "skill" was a symlink to a source
+// REPO, so its .git (11MB) and .venv both got copied wholesale into
+// the vault, and the vault's own nested .git broke its own git
+// history. Pruning the whole subtree (fs.SkipDir) is cheaper and
+// safer than filtering matched files out one at a time — it also
+// means a huge object under .git is never even read to be filtered.
+var excludedSkillDirNames = map[string]bool{
+	// version control
+	".git": true, ".hg": true, ".svn": true,
+	// build / dependency trees
+	".venv": true, "venv": true, "env": true, "node_modules": true,
+	"__pycache__": true, ".mypy_cache": true, ".pytest_cache": true,
+	".tox": true, ".ruff_cache": true, "dist": true, "build": true,
+	"target": true, ".next": true, ".turbo": true, ".cache": true,
+	".gradle": true, "vendor": true,
+}
+
+// humanSize renders n bytes as a short, human-readable size such as
+// "27.3MB" or "512B" — used only inside a warning message, so it
+// favors familiarity over precision.
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// skillTooLarge reports whether raw (SKILL.md's own bytes) plus every
+// byte collectSkillFiles gathered into files together exceed
+// maxSkillBytes, and the total it found.
+func skillTooLarge(raw []byte, files map[string][]byte) (total int64, tooLarge bool) {
+	total = int64(len(raw))
+	for _, data := range files {
+		total += int64(len(data))
+	}
+	return total, total > maxSkillBytes
+}
+
+// tooLargeSkillWarning renders the "skip the whole skill" warning a
+// skill over maxSkillBytes gets, naming the skill and its actual
+// collected size.
+func tooLargeSkillWarning(tool, path, name string, total int64) Warning {
+	return Warning{
+		Tool:   tool,
+		Path:   path,
+		Reason: fmt.Sprintf("skill %s is too large (%s); Fix: trim the folder or add it manually.", name, humanSize(total)),
+	}
+}
 
 // ClaudeCode is the import Source for Claude Code's own on-disk
 // store: personal and project skills under skills/, the CLAUDE.md
@@ -158,6 +230,11 @@ func scanSkillsDir(dir, vaultSkillsDir, pluginsDir string) ([]CandidateSkill, []
 		files, fileWarnings := collectSkillFiles(realPath, "claude-code")
 		warnings = append(warnings, fileWarnings...)
 
+		if total, tooLarge := skillTooLarge(raw, files); tooLarge {
+			warnings = append(warnings, tooLargeSkillWarning("claude-code", entryPath, name, total))
+			continue
+		}
+
 		skills = append(skills, CandidateSkill{
 			Name:        name,
 			Description: description,
@@ -191,11 +268,28 @@ func danglingSkillWarning(entryPath string) Warning {
 // disk, for example — is skipped and warned about, never read or
 // copied. A file that fails to read is dropped without a warning,
 // same as before; a dangling or escaping support-file link is not.
+//
+// FIX 1: a directory whose base name is in excludedSkillDirNames —
+// .git, node_modules, a Python venv, and so on — is pruned whole
+// (fs.SkipDir), never descended into or copied from. This runs before
+// any other check, so nothing under an excluded subtree is ever
+// opened at all, let alone copied into the vault.
+//
+// FIX 2: an individual file over maxSkillSupportFileBytes is dropped
+// with its own warning, never read into memory or copied — this is
+// checked via os.Stat, before any read, so a huge file's own bytes
+// are never loaded just to be discarded.
 func collectSkillFiles(dir, tool string) (map[string][]byte, []Warning) {
 	files := map[string][]byte{}
 	var warnings []Warning
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path != dir && excludedSkillDirNames[d.Name()] {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		rel, relErr := filepath.Rel(dir, path)
@@ -216,6 +310,18 @@ func collectSkillFiles(dir, tool string) (map[string][]byte, []Warning) {
 				Tool:   tool,
 				Path:   path,
 				Reason: "this support file link points outside the skill folder. Fix: keep support files inside the skill folder.",
+			})
+			return nil
+		}
+		info, statErr := os.Stat(realPath)
+		if statErr != nil {
+			return nil
+		}
+		if info.Size() > maxSkillSupportFileBytes {
+			warnings = append(warnings, Warning{
+				Tool:   tool,
+				Path:   path,
+				Reason: fmt.Sprintf("this support file is %s, over the %s per-file limit. Fix: trim it, or add it manually.", humanSize(info.Size()), humanSize(maxSkillSupportFileBytes)),
 			})
 			return nil
 		}
@@ -346,10 +452,17 @@ func splitTopSections(content string) (sections []mdSection, structured bool) {
 }
 
 // Memory returns candidate facts from two distinct native stores: the
-// CLAUDE.md hierarchy (global, and — when ctx.ProjectDir is set — the
-// project's own CLAUDE.md, .claude/CLAUDE.md, and CLAUDE.local.md),
-// and the separate auto-memory vault Claude Code writes under
-// projects/*/memory.
+// CLAUDE.md hierarchy (global always; the project's own CLAUDE.md,
+// .claude/CLAUDE.md, and CLAUDE.local.md only when ctx.ProjectMemory
+// is set), and the separate auto-memory vault Claude Code writes
+// under projects/*/memory (also only when ctx.ProjectMemory is set).
+//
+// FIX 4: the default is GLOBAL memory only. Per-project auto-memory
+// floods the vault with per-project work notes when it imports by
+// default — ctx.ProjectMemory, set from the CLI's --project-memory
+// flag, opts into it. When it is off and a per-project source exists
+// anyway, this reports how many were skipped rather than importing
+// them, so the flag is discoverable without scanning silently.
 func (ClaudeCode) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 	root := claudeRoot(ctx)
 
@@ -359,7 +472,7 @@ func (ClaudeCode) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 	files := []claudeMDFile{
 		{filepath.Join(root, "CLAUDE.md"), "claude-md", "user"},
 	}
-	if ctx.ProjectDir != "" {
+	if ctx.ProjectMemory && ctx.ProjectDir != "" {
 		files = append(files,
 			claudeMDFile{filepath.Join(ctx.ProjectDir, "CLAUDE.md"), "claude-md-project", "project"},
 			claudeMDFile{filepath.Join(ctx.ProjectDir, ".claude", "CLAUDE.md"), "claude-md-project-claude", "project"},
@@ -375,11 +488,47 @@ func (ClaudeCode) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 		warnings = append(warnings, fWarnings...)
 	}
 
-	autoFacts, autoWarnings := scanAutoMemory(root)
-	facts = append(facts, autoFacts...)
-	warnings = append(warnings, autoWarnings...)
+	if ctx.ProjectMemory {
+		autoFacts, autoWarnings := scanAutoMemory(root)
+		facts = append(facts, autoFacts...)
+		warnings = append(warnings, autoWarnings...)
+	} else if n := countSkippedProjectMemory(ctx, root); n > 0 {
+		warnings = append(warnings, Warning{
+			Tool:   "claude-code",
+			Reason: fmt.Sprintf("%d per-project memory sources skipped; pass --project-memory to include them.", n),
+		})
+	}
 
 	return facts, warnings, nil
+}
+
+// countSkippedProjectMemory reports how many per-project memory
+// sources exist but were left unread because ctx.ProjectMemory is
+// false: every auto-memory topic file under root/projects/*/memory
+// (excluding the MEMORY.md index), plus, when ctx.ProjectDir is set,
+// however many of its own CLAUDE.md/.claude/CLAUDE.md/CLAUDE.local.md
+// files exist. It only counts (os.Stat / filepath.Glob) — it never
+// opens a file, so a false ProjectMemory reads none of their content.
+func countSkippedProjectMemory(ctx ImportCtx, root string) int {
+	n := 0
+	matches, _ := filepath.Glob(filepath.Join(root, "projects", "*", "memory", "*.md"))
+	for _, m := range matches {
+		if filepath.Base(m) != "MEMORY.md" {
+			n++
+		}
+	}
+	if ctx.ProjectDir != "" {
+		for _, p := range []string{
+			filepath.Join(ctx.ProjectDir, "CLAUDE.md"),
+			filepath.Join(ctx.ProjectDir, ".claude", "CLAUDE.md"),
+			filepath.Join(ctx.ProjectDir, "CLAUDE.local.md"),
+		} {
+			if info, err := os.Stat(p); err == nil && !info.IsDir() {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // readClaudeMDFile reads one CLAUDE.md-shaped file, strips Loadout's

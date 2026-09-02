@@ -336,6 +336,11 @@ func TestCodexMemoryOverrideTakesPrecedenceOverPlain(t *testing.T) {
 	}
 }
 
+// TestCodexMemoryProjectChainWalksGitRootToProjectDir sets
+// ProjectMemory: true, since FIX 4 made the project AGENTS.md chain
+// per-project memory — opt-in, not imported by default. See
+// TestCodexMemoryDefaultExcludesProjectChain for the default-off
+// case.
 func TestCodexMemoryProjectChainWalksGitRootToProjectDir(t *testing.T) {
 	t.Setenv("CODEX_HOME", "")
 	home := t.TempDir()
@@ -359,7 +364,7 @@ func TestCodexMemoryProjectChainWalksGitRootToProjectDir(t *testing.T) {
 	}
 	src := importer.Codex{}
 
-	facts, _, err := src.Memory(importer.ImportCtx{Home: home, ProjectDir: sub})
+	facts, _, err := src.Memory(importer.ImportCtx{Home: home, ProjectDir: sub, ProjectMemory: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,5 +594,75 @@ func TestCrossSourceDedupPreservesSupportFilesAcrossSymlinkedSkill(t *testing.T)
 	}
 	if _, err := os.Stat(filepath.Join(foo.Dir, "helper.sh")); err != nil {
 		t.Fatalf("want helper.sh preserved in the imported skill (seen by one tool via a symlinked skill folder, another via the real path): %v", err)
+	}
+}
+
+// TestCodexMemoryDefaultExcludesProjectChain is the FIX 4 regression
+// test for codex: the project AGENTS.md chain is per-project memory,
+// now opt-in. The default (ProjectMemory: false) must import the
+// global AGENTS.md only, skip the project chain, and warn that
+// --project-memory would include it; ProjectMemory: true must import
+// both.
+func TestCodexMemoryDefaultExcludesProjectChain(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+	home := t.TempDir()
+	root := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Global codex note.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "AGENTS.md"), []byte("Project codex note.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := importer.Codex{}
+
+	facts, warnings, err := src.Memory(importer.ImportCtx{Home: home, ProjectDir: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawGlobal, sawProject bool
+	for _, f := range facts {
+		if strings.Contains(f.Body, "Global codex note.") {
+			sawGlobal = true
+		}
+		if strings.Contains(f.Body, "Project codex note.") {
+			sawProject = true
+		}
+	}
+	if !sawGlobal {
+		t.Fatalf("the default must still import the global AGENTS.md, got %+v", facts)
+	}
+	if sawProject {
+		t.Fatalf("the default must not import the project AGENTS.md, got %+v", facts)
+	}
+	var sawSkipNote bool
+	for _, w := range warnings {
+		if strings.Contains(w.Reason, "per-project memory") && strings.Contains(w.Reason, "--project-memory") {
+			sawSkipNote = true
+		}
+	}
+	if !sawSkipNote {
+		t.Fatalf("want a warning naming --project-memory when a project source exists but is skipped, got %+v", warnings)
+	}
+
+	facts, _, err = src.Memory(importer.ImportCtx{Home: home, ProjectDir: project, ProjectMemory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawGlobal, sawProject = false, false
+	for _, f := range facts {
+		if strings.Contains(f.Body, "Global codex note.") {
+			sawGlobal = true
+		}
+		if strings.Contains(f.Body, "Project codex note.") {
+			sawProject = true
+		}
+	}
+	if !sawGlobal || !sawProject {
+		t.Fatalf("with --project-memory want both the global and project AGENTS.md, got %+v", facts)
 	}
 }

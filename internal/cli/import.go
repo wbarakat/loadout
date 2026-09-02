@@ -11,7 +11,7 @@ import (
 	"loadout.dev/loadout/internal/vault"
 )
 
-const importUsage = "usage: loadout import [SOURCE...] [--skills] [--memory] [--project DIR] [--dry-run]"
+const importUsage = "usage: loadout import [SOURCE...] [--skills] [--memory] [--project DIR] [--project-memory] [--dry-run]"
 
 // importRegistry lists every import Source loadout knows, in the
 // order "loadout import" tries them. v1 holds claude-code and codex;
@@ -59,12 +59,17 @@ func selectImportSources(names []string) ([]importer.Source, error) {
 }
 
 // importArgs is the parsed shape of "loadout import [SOURCE...]
-// [--skills] [--memory] [--project DIR] [--dry-run]".
+// [--skills] [--memory] [--project DIR] [--project-memory]
+// [--dry-run]".
 type importArgs struct {
 	sources        []string
 	skills, memory bool
 	dryRun         bool
 	project        string
+	// projectMemory sets importer.ImportCtx.ProjectMemory — see FIX 4's
+	// doc comment there. The default (false) scopes memory to GLOBAL
+	// instruction files only.
+	projectMemory bool
 }
 
 // parseImportArgs reads importArgs out of args. ok is false when args
@@ -79,6 +84,8 @@ func parseImportArgs(args []string) (importArgs, bool) {
 			a.skills = true
 		case "--memory":
 			a.memory = true
+		case "--project-memory":
+			a.projectMemory = true
 		case "--dry-run":
 			a.dryRun = true
 		case "--project":
@@ -147,6 +154,7 @@ func cmdImport(out, errOut io.Writer, args []string, m mode) int {
 		VaultRoot:      v.Root,
 		VaultSkillsDir: v.SkillsDir(),
 		ProjectDir:     projectDir,
+		ProjectMemory:  parsed.projectMemory,
 	}
 	opt := importer.Options{Skills: skills, Memory: memory, DryRun: parsed.dryRun}
 
