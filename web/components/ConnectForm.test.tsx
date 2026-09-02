@@ -24,17 +24,25 @@ vi.mock("../lib/dash/config.js", () => ({
 const newDeviceMock = vi.fn();
 const registerForApprovalMock = vi.fn();
 const sessionFromMock = vi.fn();
+// approveCommand itself stays real (it's what we're testing the guard
+// around), but wrapped in a spy so a test can assert it is never called
+// with a bad device name. Declared via vi.hoisted so it exists before the
+// vi.mock factory below runs (that factory executes at import time, ahead
+// of any ordinary top-level const in this file).
+const approveCommandSpy = vi.hoisted(() => vi.fn<(deviceName: string) => string>());
 vi.mock("../lib/dash/session.js", async () => {
   const actual =
     await vi.importActual<typeof import("../lib/dash/session.js")>(
       "../lib/dash/session.js",
     );
+  approveCommandSpy.mockImplementation(actual.approveCommand);
   return {
     ...actual,
     newDevice: () => newDeviceMock(),
     registerForApproval: (cfg: unknown, recipient: unknown) =>
       registerForApprovalMock(cfg, recipient),
     sessionFrom: (cfg: unknown) => sessionFromMock(cfg),
+    approveCommand: (deviceName: string) => approveCommandSpy(deviceName),
   };
 });
 
@@ -72,6 +80,7 @@ describe("ConnectForm", () => {
     registerForApprovalMock.mockReset();
     sessionFromMock.mockReset();
     pullMock.mockReset();
+    approveCommandSpy.mockClear();
   });
 
   afterEach(() => {
@@ -212,5 +221,26 @@ describe("ConnectForm", () => {
     // <input> values are not part of textContent, so this also proves the
     // token was never copied out into a visible text node.
     expect(document.body.textContent ?? "").not.toContain(TEST_TOKEN);
+  });
+
+  it("rejects a device name with an internal space instead of crashing", async () => {
+    render(<ConnectForm onConnected={() => {}} />);
+    fillConnectionFields();
+    await generateKey();
+    approveCommandSpy.mockClear(); // clear the call made for the default "dashboard" name
+
+    // This must not throw: approveCommand("front desk") throws on internal
+    // whitespace, and the component must never call it with this value.
+    expect(() => {
+      fireEvent.change(screen.getByLabelText(/device name/i), {
+        target: { value: "front desk" },
+      });
+    }).not.toThrow();
+
+    await screen.findByText(/can contain only/i);
+    expect(screen.getByRole("button", { name: /register \+ connect/i })).toBeDisabled();
+    expect(
+      approveCommandSpy.mock.calls.some(([name]) => name === "front desk"),
+    ).toBe(false);
   });
 });

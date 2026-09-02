@@ -16,6 +16,19 @@ import { NotApproved } from "./states/NotApproved.js";
 
 const DEFAULT_DEVICE_NAME = "dashboard";
 
+/** A device name is a kebab identifier: lowercase letters, digits, and
+ * hyphens only. This matches `approveCommand`'s own guard (it rejects
+ * internal whitespace) plus a tighter, safe charset — the name is pasted
+ * straight into a CLI command, so it must never carry a space or shell
+ * metacharacter. */
+const DEVICE_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** Shown under the device name field when the trimmed name is not blank
+ * and does not match `DEVICE_NAME_RE`. Names the fix directly. */
+const DEVICE_NAME_ERROR =
+  "The device name can contain only lowercase letters, digits, and " +
+  "hyphens (no spaces).";
+
 /** The message shown for any connect failure other than "not approved yet".
  * Names the three most likely fixes, in order: a wrong URL or token, a
  * `loadoutd` that is not running, and a `-cors-origin` mismatch. */
@@ -27,6 +40,16 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** True for a blank (defaults to "dashboard") or a well-formed kebab name.
+ * False for anything else — in particular, internal whitespace, which
+ * would make `approveCommand` throw. */
+function isValidDeviceName(deviceName: string): boolean {
+  const trimmed = deviceName.trim();
+  return trimmed === "" || DEVICE_NAME_RE.test(trimmed);
+}
+
+/** Only call this once `isValidDeviceName` is true — it never rewrites a
+ * bad name, it only fills in the default for a blank one. */
 function effectiveDeviceName(deviceName: string): string {
   const trimmed = deviceName.trim();
   return trimmed === "" ? DEFAULT_DEVICE_NAME : trimmed;
@@ -58,7 +81,13 @@ export function ConnectForm(props: {
   const [notApproved, setNotApproved] = useState(false);
 
   const hasKey = identity !== "" && recipient !== "";
-  const canConnect = hasKey && baseUrl.trim() !== "" && token !== "" && !connecting;
+  const deviceNameValid = isValidDeviceName(deviceName);
+  const canConnect =
+    hasKey &&
+    baseUrl.trim() !== "" &&
+    token !== "" &&
+    deviceNameValid &&
+    !connecting;
 
   // A reload with an already-saved identity should not force a fresh key:
   // that would abandon the recipient an admin already approved. Derive its
@@ -142,6 +171,10 @@ export function ConnectForm(props: {
       setConnectError("Generate or import a device key first.");
       return;
     }
+    if (!deviceNameValid) {
+      setConnectError(DEVICE_NAME_ERROR);
+      return;
+    }
     const cfg = buildConfig();
     saveConfig(cfg);
     setConnectError(null);
@@ -167,10 +200,14 @@ export function ConnectForm(props: {
   }
 
   if (notApproved) {
+    // Defensive: connect only ever runs with a valid name (handleConnect
+    // guards on deviceNameValid), so this fallback should never fire. It
+    // exists so a name edited mid-flight can never make approveCommand
+    // throw inside <NotApproved>.
     return (
       <NotApproved
         recipient={recipient}
-        deviceName={effectiveDeviceName(deviceName)}
+        deviceName={deviceNameValid ? effectiveDeviceName(deviceName) : DEFAULT_DEVICE_NAME}
         onRetry={() => {
           void handleRetry();
         }}
@@ -178,7 +215,9 @@ export function ConnectForm(props: {
     );
   }
 
-  const command = hasKey ? approveCommand(deviceName) : "";
+  // Never call approveCommand with an unvalidated name — it throws on
+  // internal whitespace (see DEVICE_NAME_RE above).
+  const command = hasKey && deviceNameValid ? approveCommand(deviceName) : null;
 
   return (
     <form
@@ -236,8 +275,12 @@ export function ConnectForm(props: {
             type="text"
             value={deviceName}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setDeviceName(e.target.value)}
+            aria-invalid={!deviceNameValid}
             className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-sm"
           />
+          {!deviceNameValid ? (
+            <p className="mt-1 text-sm text-red-700">{DEVICE_NAME_ERROR}</p>
+          ) : null}
         </div>
       </div>
 
@@ -307,16 +350,24 @@ export function ConnectForm(props: {
 
             <div>
               <div className="text-xs font-medium text-slate-800">Approve command</div>
-              <div className="mt-1 flex items-center gap-2">
-                <code className="min-w-0 flex-1 truncate rounded bg-slate-100 px-2 py-1 text-xs text-slate-800">
-                  {command}
-                </code>
-                <CopyButton value={command} label="Copy approve command" />
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                Run this on an approved device, such as your Mac, before you
-                connect.
-              </p>
+              {command !== null ? (
+                <>
+                  <div className="mt-1 flex items-center gap-2">
+                    <code className="min-w-0 flex-1 truncate rounded bg-slate-100 px-2 py-1 text-xs text-slate-800">
+                      {command}
+                    </code>
+                    <CopyButton value={command} label="Copy approve command" />
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Run this on an approved device, such as your Mac, before
+                    you connect.
+                  </p>
+                </>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">
+                  Fix the device name above to see the approve command.
+                </p>
+              )}
             </div>
 
             <button
