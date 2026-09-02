@@ -194,7 +194,10 @@ func parseCursorRuleFrontmatter(raw []byte) (fields map[string]string, body stri
 // concept, so a globbed rule's pattern is appended to the body as
 // PLAIN TEXT rather than dropped. A file whose frontmatter fence
 // never closes is skipped with a warning, never aborting the rest of
-// the directory's scan.
+// the directory's scan. A file over maxMemoryFileSize — the same
+// 4MiB cap every other memory reader in this package applies — is
+// skipped with a warning too, rather than read and imported as one
+// giant fact.
 func scanCursorRules(projectDir string) ([]CandidateFact, []Warning) {
 	dir := filepath.Join(projectDir, ".cursor", "rules")
 	entries, err := os.ReadDir(dir)
@@ -209,6 +212,20 @@ func scanCursorRules(projectDir string) ([]CandidateFact, []Warning) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+
+		info, err := os.Stat(path)
+		if err != nil {
+			warnings = append(warnings, Warning{Tool: "cursor", Path: path, Reason: "the file could not be read: " + err.Error()})
+			continue
+		}
+		if info.Size() > maxMemoryFileSize {
+			warnings = append(warnings, Warning{
+				Tool:   "cursor",
+				Path:   path,
+				Reason: "this file is larger than 4MiB. Fix: split it into smaller files.",
+			})
+			continue
+		}
 
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -260,18 +277,13 @@ func scanCursorRules(projectDir string) ([]CandidateFact, []Warning) {
 			description = name
 		}
 
-		modTime := time.Time{}
-		if info, err := e.Info(); err == nil {
-			modTime = info.ModTime()
-		}
-
 		facts = append(facts, CandidateFact{
 			Name:        name,
 			Description: description,
 			Type:        factType,
 			Body:        body,
 			Tool:        "cursor",
-			ModTime:     modTime,
+			ModTime:     info.ModTime(),
 		})
 	}
 	return facts, warnings
@@ -284,7 +296,9 @@ func scanCursorRules(projectDir string) ([]CandidateFact, []Warning) {
 // os.Lstat's own IsDir: a FILE imports as one fact; a DIRECTORY
 // imports each regular file directly inside it as its own fact
 // (non-recursive: a nested subdirectory is left alone rather than
-// guessed at).
+// guessed at). A FILE over maxMemoryFileSize — the same 4MiB cap
+// every other memory reader in this package applies — is skipped
+// with a warning rather than read and imported as one giant fact.
 func scanCursorrulesPath(projectDir string) ([]CandidateFact, []Warning) {
 	path := filepath.Join(projectDir, ".cursorrules")
 	info, err := os.Lstat(path)
@@ -294,6 +308,14 @@ func scanCursorrulesPath(projectDir string) ([]CandidateFact, []Warning) {
 
 	if info.IsDir() {
 		return scanCursorrulesDir(path)
+	}
+
+	if info.Size() > maxMemoryFileSize {
+		return nil, []Warning{{
+			Tool:   "cursor",
+			Path:   path,
+			Reason: "this file is larger than 4MiB. Fix: split it into smaller files.",
+		}}
 	}
 
 	raw, err := os.ReadFile(path)
@@ -332,6 +354,20 @@ func scanCursorrulesDir(dir string) ([]CandidateFact, []Warning) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+
+		modTime := time.Time{}
+		if fi, err := e.Info(); err == nil {
+			modTime = fi.ModTime()
+			if fi.Size() > maxMemoryFileSize {
+				warnings = append(warnings, Warning{
+					Tool:   "cursor",
+					Path:   path,
+					Reason: "this file is larger than 4MiB. Fix: split it into smaller files.",
+				})
+				continue
+			}
+		}
+
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			warnings = append(warnings, Warning{Tool: "cursor", Path: path, Reason: "the file could not be read: " + err.Error()})
@@ -340,10 +376,6 @@ func scanCursorrulesDir(dir string) ([]CandidateFact, []Warning) {
 		body := strings.TrimSpace(string(raw))
 		if body == "" {
 			continue
-		}
-		modTime := time.Time{}
-		if fi, err := e.Info(); err == nil {
-			modTime = fi.ModTime()
 		}
 		base := kebabify(strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
 		if base == "" {

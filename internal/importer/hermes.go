@@ -56,16 +56,22 @@ func (Hermes) Detect(ctx ImportCtx) (bool, string) {
 
 // hermesBundledManifest reads <skillsDir>/.bundled_manifest — a flat
 // "<skill-name>:<content-hash>" list, one entry per line — and
-// returns the set of skill names it names. A missing manifest is not
-// a problem: it returns an empty set, so scanHermesSkills degrades to
-// "import every top-level skill" (source map §4's own graceful-
-// degradation rule). A line with no ":" is ignored, not an error.
-func hermesBundledManifest(skillsDir string) map[string]bool {
+// returns the set of skill names it names, plus whether the manifest
+// file itself is present. A missing manifest returns (nil, false):
+// scanHermesSkills degrades to "import every top-level skill" —
+// there is nothing to exclude (source map §4's own graceful-
+// degradation rule). A manifest that IS present but names zero
+// usable skills — malformed content, or no valid "name:hash" line —
+// returns (an empty but non-nil set, true): the caller must not treat
+// this the same as "no manifest", since that would silently import
+// every bundled vendor skill. A line with no ":" is ignored, not an
+// error.
+func hermesBundledManifest(skillsDir string) (names map[string]bool, present bool) {
 	raw, err := os.ReadFile(filepath.Join(skillsDir, ".bundled_manifest"))
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	names := map[string]bool{}
+	names = map[string]bool{}
 	for _, line := range strings.Split(normalizeText(string(raw)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -79,7 +85,7 @@ func hermesBundledManifest(skillsDir string) map[string]bool {
 			names[name] = true
 		}
 	}
-	return names
+	return names, true
 }
 
 // scanHermesSkills reads skillsDir, one directory listing, and treats
@@ -96,17 +102,33 @@ func hermesBundledManifest(skillsDir string) map[string]bool {
 //   - any entry whose name is a key in this directory's own
 //     .bundled_manifest — the bundled vendor library.
 //
+// A manifest that is PRESENT but names zero usable skills — malformed
+// or garbage content — fails CLOSED: this returns no skills at all
+// for skillsDir, with a warning, rather than fall back to "no
+// manifest" and silently import every bundled vendor skill alongside
+// the user's own. Only a genuinely ABSENT manifest imports every
+// top-level skill — there is nothing named to exclude.
+//
 // tool is the CandidateSkill.Tool every returned skill and warning
 // carries: "hermes" for the top-level call, "hermes:<profile>" for a
 // profile's own skills directory — so a profile skill's provenance
-// names the profile it came from.
+// names the profile it came from. The same fail-closed rule applies
+// per profile: a profile with its own present-but-empty manifest
+// skips that profile's top-level skills the same way.
 func scanHermesSkills(skillsDir, tool, vaultSkillsDir string) ([]CandidateSkill, []Warning) {
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
 		return nil, nil
 	}
 
-	bundled := hermesBundledManifest(skillsDir)
+	bundled, present := hermesBundledManifest(skillsDir)
+	if present && len(bundled) == 0 {
+		return nil, []Warning{{
+			Tool:   tool,
+			Path:   filepath.Join(skillsDir, ".bundled_manifest"),
+			Reason: "hermes .bundled_manifest is present but unreadable; skipping top-level skills to avoid importing bundled vendor skills. Fix: check the manifest",
+		}}
+	}
 
 	var skills []CandidateSkill
 	var warnings []Warning
@@ -150,13 +172,14 @@ func hermesProfileNames(root string) []string {
 // subtree excluded, per scanHermesSkills — plus, only when
 // ctx.ProjectMemory is set, every profile's own
 // ~/.hermes/profiles/<name>/skills, namespaced by
-// Tool: "hermes:<name>". Profiles are a per-project/opt-in surface
-// (source map §4): a real install can hold meaningful content in a
-// profile and little at the top level, but a profile also fragments a
-// single Hermes install into several near-complete parallel
-// environments, so this source treats a profile scan the same way
-// every other source in this package treats per-project content —
-// off by default.
+// Tool: "hermes:<name>" (name KEBABIFIED — see the doc comment on
+// Memory's own use of kebabify(profile) for why). Profiles are a
+// per-project/opt-in surface (source map §4): a real install can hold
+// meaningful content in a profile and little at the top level, but a
+// profile also fragments a single Hermes install into several
+// near-complete parallel environments, so this source treats a
+// profile scan the same way every other source in this package
+// treats per-project content — off by default.
 func (Hermes) Skills(ctx ImportCtx) ([]CandidateSkill, []Warning, error) {
 	root := hermesRoot(ctx)
 
@@ -164,7 +187,7 @@ func (Hermes) Skills(ctx ImportCtx) ([]CandidateSkill, []Warning, error) {
 
 	if ctx.ProjectMemory {
 		for _, profile := range hermesProfileNames(root) {
-			tool := "hermes:" + profile
+			tool := "hermes:" + kebabify(profile)
 			pSkills, pWarnings := scanHermesSkills(filepath.Join(root, "profiles", profile, "skills"), tool, ctx.VaultSkillsDir)
 			skills = append(skills, pSkills...)
 			warnings = append(warnings, pWarnings...)
@@ -299,10 +322,17 @@ func splitHermesChunks(text string) []string {
 // always, plus — only when ctx.ProjectMemory is set — the same two
 // files under every profile's own
 // ~/.hermes/profiles/<name>/memories, namespaced by
-// Tool: "hermes:<name>" and named with a "<name>-" prefix. This is
-// the same per-project/opt-in rule Skills applies to a profile's own
-// skills (see Skills's own doc comment): a profile is a fragment of
-// one Hermes install, not the tool's global memory.
+// Tool: "hermes:<name>" and named with a "<name>-" prefix, name
+// KEBABIFIED first (lowercased, "_"/space and every other invalid
+// character collapsed to "-"). A profile's own directory name is
+// whatever the user chose — "Brain_2", say — which is not itself a
+// valid vault item name; without kebabifying it first, the item name
+// "by: import:hermes:<name>" would carry the invalid form too, and
+// every fact under that profile would fail vault.ValidName and get
+// skipped as a Warning rather than imported. This is the same
+// per-project/opt-in rule Skills applies to a profile's own skills
+// (see Skills's own doc comment): a profile is a fragment of one
+// Hermes install, not the tool's global memory.
 //
 // When ctx.ProjectMemory is off and one or more profiles exist
 // anyway, this warns how many were skipped — the same
@@ -317,8 +347,9 @@ func (Hermes) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 
 	if ctx.ProjectMemory {
 		for _, profile := range hermesProfileNames(root) {
-			tool := "hermes:" + profile
-			pFacts, pWarnings := scanHermesMemories(filepath.Join(root, "profiles", profile, "memories"), tool, profile+"-")
+			kebabProfile := kebabify(profile)
+			tool := "hermes:" + kebabProfile
+			pFacts, pWarnings := scanHermesMemories(filepath.Join(root, "profiles", profile, "memories"), tool, kebabProfile+"-")
 			facts = append(facts, pFacts...)
 			warnings = append(warnings, pWarnings...)
 		}

@@ -171,6 +171,38 @@ func TestDroidSkillsAlsoScansGenericAgentsSkills(t *testing.T) {
 	}
 }
 
+// TestDroidSkillsScansFactoryCompatScopes is the MINOR E regression
+// test (source map §6): Droid also reads <repo>/.factory/skills, one
+// of the compat scopes Factory's own docs list alongside the generic
+// .agents/skills convention.
+func TestDroidSkillsScansFactoryCompatScopes(t *testing.T) {
+	home, vaultSkillsDir := setupDroidHome(t)
+	project := t.TempDir()
+	skillDir := filepath.Join(project, ".factory", "skills", "projectfactoryskill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: projectfactoryskill\ndescription: seen via the project's own .factory/skills scope\n---\n\nDo the project factory thing.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := importer.Droid{}
+
+	skills, _, err := src.Skills(importer.ImportCtx{Home: home, VaultSkillsDir: vaultSkillsDir, ProjectDir: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, s := range skills {
+		if s.Name == "projectfactoryskill" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want the project .factory/skills entry found, got %+v", skills)
+	}
+}
+
 // TestDroidMemoryImportsGlobalByDefaultNotProject checks RULING 2 for
 // droid: the global AGENTS.md imports by default (loadout block
 // stripped), while a project AGENTS.md chain does NOT import unless
@@ -250,6 +282,75 @@ func TestDroidMemoryImportsGlobalByDefaultNotProject(t *testing.T) {
 	}
 	if !sawRoot || !sawNested {
 		t.Fatalf("with --project-memory want facts from both the repo root and the nested project dir, got %+v", facts)
+	}
+}
+
+// TestCrossToolDedupDroidAndCodexImportSharedProjectAgentsMdOnce is
+// the IMPORTANT C regression test: under --project-memory, Codex and
+// Droid both read the SAME project AGENTS.md at the repo root,
+// producing byte-identical bodies. Before the fix, they named the
+// resulting fact differently ("agents-project" for Droid,
+// "agents-md-project" for Codex — see codex.go's readCodexAgentsFile),
+// so name+content-hash dedup could not collapse the duplicate and the
+// same content imported twice. After the fix, both tools name it
+// "agents-md-project", and the content imports exactly once.
+func TestCrossToolDedupDroidAndCodexImportSharedProjectAgentsMdOnce(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+	home := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".factory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "AGENTS.md"), []byte("Shared project note seen by both tools.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	v := newClaudeCodeTestVault(t)
+	ctx := importer.ImportCtx{Home: home, VaultRoot: v.Root, ProjectDir: repoRoot, ProjectMemory: true}
+
+	result, err := importer.RunImport(v, []importer.Source{importer.Droid{}, importer.Codex{}}, ctx, importer.Options{Memory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, f := range facts {
+		if strings.Contains(f.Body, "Shared project note seen by both tools.") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("want the shared project AGENTS.md content written exactly once, got %d copies: %+v", count, facts)
+	}
+
+	var importedCount, dedupedCount int
+	for _, ref := range result.Imported {
+		if ref.Name == "agents-md-project" {
+			importedCount++
+		}
+	}
+	for _, ref := range result.Deduped {
+		if ref.Name == "agents-md-project" {
+			dedupedCount++
+		}
+	}
+	if importedCount != 1 {
+		t.Fatalf("want agents-md-project imported exactly once, got %d: %+v", importedCount, result.Imported)
+	}
+	if dedupedCount != 1 {
+		t.Fatalf("want the second sighting recorded as deduped, got %d: %+v", dedupedCount, result.Deduped)
 	}
 }
 

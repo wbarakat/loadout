@@ -193,6 +193,163 @@ func TestHermesSkillsBundledManifestAbsentImportsAll(t *testing.T) {
 	}
 }
 
+// TestHermesSkillsMalformedManifestFailsClosed is the IMPORTANT B
+// regression test: a .bundled_manifest that EXISTS but parses to zero
+// usable skill names (garbage content, no valid "name:hash" line)
+// must fail CLOSED — no top-level skill imports at all — rather than
+// degrade to "no manifest" and sweep in every bundled vendor skill
+// alongside the user's own.
+func TestHermesSkillsMalformedManifestFailsClosed(t *testing.T) {
+	home := t.TempDir()
+	skillsDir := filepath.Join(home, ".hermes", "skills")
+	mineDir := filepath.Join(skillsDir, "mine")
+	if err := os.MkdirAll(mineDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: mine\ndescription: the user's own skill\n---\n\nDo the hermes thing.\n"
+	if err := os.WriteFile(filepath.Join(mineDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, ".bundled_manifest"), []byte("{{garbage}}\nnot a valid line either\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := importer.Hermes{}
+
+	skills, warnings, err := src.Skills(importer.ImportCtx{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 0 {
+		t.Fatalf("a present-but-malformed manifest must fail closed, importing NO top-level skills, got %+v", skills)
+	}
+	var sawWarning bool
+	for _, w := range warnings {
+		if strings.Contains(w.Reason, "present but unreadable") && strings.Contains(w.Reason, "skipping top-level skills") {
+			sawWarning = true
+		}
+	}
+	if !sawWarning {
+		t.Fatalf("want the fail-closed warning, got %+v", warnings)
+	}
+}
+
+// TestHermesSkillsWellFormedManifestExcludesBundledImportsUser is the
+// companion IMPORTANT B check: a well-formed manifest (real
+// "name:hash" entries) must behave exactly as before — the named
+// bundled skill excluded, an unrelated user skill still imported, no
+// fail-closed warning.
+func TestHermesSkillsWellFormedManifestExcludesBundledImportsUser(t *testing.T) {
+	home := t.TempDir()
+	skillsDir := filepath.Join(home, ".hermes", "skills")
+	mineDir := filepath.Join(skillsDir, "mine")
+	if err := os.MkdirAll(mineDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: mine\ndescription: the user's own skill\n---\n\nDo the hermes thing.\n"
+	if err := os.WriteFile(filepath.Join(mineDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bundledDir := filepath.Join(skillsDir, "bundledone")
+	if err := os.MkdirAll(bundledDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundledDir, "SKILL.md"), []byte("---\nname: bundledone\ndescription: vendor skill\n---\n\nVendor body.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, ".bundled_manifest"), []byte("bundledone:ae6e92c2cd27c3da8a0587f089d19fe3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := importer.Hermes{}
+
+	skills, warnings, err := src.Skills(importer.ImportCtx{Home: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, s := range skills {
+		names[s.Name] = true
+	}
+	if !names["mine"] {
+		t.Fatalf("want the user skill imported, got %+v", skills)
+	}
+	if names["bundledone"] {
+		t.Fatalf("want the manifest-named bundled skill excluded, got %+v", skills)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w.Reason, "present but unreadable") {
+			t.Fatalf("a well-formed manifest must never trigger the fail-closed warning, got %+v", warnings)
+		}
+	}
+}
+
+// TestHermesProfileNameKebabified is the MINOR D regression test: a
+// profile named "Brain_2" is not itself a valid vault item name
+// (uppercase, underscore). Its skill and its facts must still import,
+// under the KEBABIFIED provenance tag "import:hermes:brain-2".
+func TestHermesProfileNameKebabified(t *testing.T) {
+	home := t.TempDir()
+	profileDir := filepath.Join(home, ".hermes", "profiles", "Brain_2")
+
+	memoriesDir := filepath.Join(profileDir, "memories")
+	if err := os.MkdirAll(memoriesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memoriesDir, "USER.md"), []byte("Brain_2 profile user note.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skillDir := filepath.Join(profileDir, "skills", "brainskill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := "---\nname: brainskill\ndescription: a brain-2 profile skill\n---\n\nDo the brain thing.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	v := newClaudeCodeTestVault(t)
+	ctx := importer.ImportCtx{Home: home, VaultRoot: v.Root, ProjectMemory: true}
+
+	_, err := importer.RunImport(v, []importer.Source{importer.Hermes{}}, ctx, importer.Options{Skills: true, Memory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	facts, err := vault.ListFacts(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundFact *vault.Fact
+	for i := range facts {
+		if strings.Contains(facts[i].Body, "Brain_2 profile user note.") {
+			foundFact = &facts[i]
+		}
+	}
+	if foundFact == nil {
+		t.Fatalf("want the Brain_2 profile's fact imported, got %+v", facts)
+	}
+	if foundFact.By != "import:hermes:brain-2" {
+		t.Fatalf("want by: import:hermes:brain-2, got %q", foundFact.By)
+	}
+
+	skills, err := vault.ListSkills(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundSkill *vault.Skill
+	for i := range skills {
+		if skills[i].Name == "brainskill" {
+			foundSkill = &skills[i]
+		}
+	}
+	if foundSkill == nil {
+		t.Fatalf("want the Brain_2 profile's skill imported, got %+v", skills)
+	}
+	if foundSkill.By != "import:hermes:brain-2" {
+		t.Fatalf("want by: import:hermes:brain-2, got %q", foundSkill.By)
+	}
+}
+
 // TestHermesSkillsProfileSkillsOnlyUnderProjectMemory checks the
 // per-project/opt-in rule for a profile's own skills: by default the
 // profile "brain" skill "ps" must not appear; with ProjectMemory

@@ -829,7 +829,7 @@ func TestFullFleetDefaultImportDetectsAllSevenAndImportsUnion(t *testing.T) {
 	// Per-project/per-profile memory is off by default: claude-code's
 	// auto-memory, gemini's and droid's project files, cursor's
 	// project rule, and hermes's profile memory must all be absent.
-	for _, offByDefault := range []string{"proj1-note", "gemini-project", "agents-project", "my-rule", "work-memory"} {
+	for _, offByDefault := range []string{"proj1-note", "gemini-project", "agents-md-project", "my-rule", "work-memory"} {
 		if _, ok := factNamed(facts, offByDefault); ok {
 			t.Fatalf("fact %q is per-project/per-profile content and must not import without --project-memory, got %+v", offByDefault, facts)
 		}
@@ -853,10 +853,17 @@ func TestFullFleetDefaultImportDetectsAllSevenAndImportsUnion(t *testing.T) {
 // TestFullFleetProjectMemoryFlagAddsProjectAndProfileMemory proves
 // --project-memory widens the same run to every off-by-default
 // per-project and per-profile source at once: claude-code's
-// auto-memory, gemini's and droid's project files, cursor's project
-// rule (cursor has no global memory at all, so this is the only way
-// any cursor memory ever imports), and hermes's profile skill and
-// memory.
+// auto-memory, gemini's project file, cursor's project rule (cursor
+// has no global memory at all, so this is the only way any cursor
+// memory ever imports), and hermes's profile skill and memory.
+//
+// The fixture's projectDir/AGENTS.md is read by BOTH codex and droid
+// (source map §6) — under --project-memory the two tools see
+// byte-identical content. Since the fix for the cross-tool dedup gap
+// (droid now names an AGENTS.md-derived project fact the same way
+// codex does, "agents-md-project"), name+content-hash dedup collapses
+// that into ONE fact, not two — this test checks for the single
+// deduped fact, not a droid-only "agents-project" name.
 func TestFullFleetProjectMemoryFlagAddsProjectAndProfileMemory(t *testing.T) {
 	_, vaultRoot, projectDir := setupFullFleetFixture(t)
 
@@ -880,10 +887,26 @@ func TestFullFleetProjectMemoryFlagAddsProjectAndProfileMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"proj1-note", "gemini-project", "agents-project", "my-rule", "work-memory"} {
+	for _, want := range []string{"proj1-note", "gemini-project", "agents-md-project", "my-rule", "work-memory"} {
 		if _, ok := factNamed(facts, want); !ok {
 			t.Fatalf("want per-project/per-profile fact %q imported with --project-memory, got %+v", want, facts)
 		}
+	}
+
+	// The shared project AGENTS.md content must import exactly once,
+	// under one of the two tools' provenance — never twice under two
+	// different names.
+	agentsProjectCount := 0
+	for _, f := range facts {
+		if strings.Contains(f.Body, "Project-specific droid notes.") {
+			agentsProjectCount++
+			if f.By != "import:codex" && f.By != "import:droid" {
+				t.Fatalf("want the shared project AGENTS.md fact tagged import:codex or import:droid, got %q", f.By)
+			}
+		}
+	}
+	if agentsProjectCount != 1 {
+		t.Fatalf("want the project AGENTS.md content, shared by codex and droid, imported exactly once, got %d: %+v", agentsProjectCount, facts)
 	}
 }
 

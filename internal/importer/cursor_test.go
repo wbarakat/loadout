@@ -486,6 +486,92 @@ func TestCursorMemoryCursorrulesDirectoryImportsEachFile(t *testing.T) {
 	}
 }
 
+// TestCursorMemoryOversizedMdcSkipsWithWarning is the IMPORTANT A
+// regression test: a .mdc rule file over 4MiB — the same cap every
+// other memory reader in this package already applies — must be
+// skipped with a warning, not imported as one giant fact. A second,
+// normal-sized .mdc file in the same directory must still import.
+func TestCursorMemoryOversizedMdcSkipsWithWarning(t *testing.T) {
+	project := t.TempDir()
+	rulesDir := filepath.Join(project, ".cursor", "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	big := make([]byte, 4*1024*1024+1)
+	for i := range big {
+		big[i] = 'a'
+	}
+	if err := os.WriteFile(filepath.Join(rulesDir, "big.mdc"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	good := "---\ndescription: a fine rule\n---\n\nWrite clear docs.\n"
+	if err := os.WriteFile(filepath.Join(rulesDir, "good.mdc"), []byte(good), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := importer.Cursor{}
+
+	facts, warnings, err := src.Memory(importer.ImportCtx{Home: t.TempDir(), ProjectDir: project, ProjectMemory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range facts {
+		if f.Name == "big" {
+			t.Fatalf("an oversized .mdc must never import as a fact, got %+v", f)
+		}
+	}
+	var sawGood bool
+	for _, f := range facts {
+		if f.Name == "good" {
+			sawGood = true
+		}
+	}
+	if !sawGood {
+		t.Fatalf("want the well-formed .mdc still imported despite the oversized one, got %+v", facts)
+	}
+	var sawSizeWarning bool
+	for _, w := range warnings {
+		if strings.Contains(w.Path, "big.mdc") && strings.Contains(w.Reason, "4MiB") {
+			sawSizeWarning = true
+		}
+	}
+	if !sawSizeWarning {
+		t.Fatalf("want a 4MiB warning naming big.mdc, got %+v", warnings)
+	}
+}
+
+// TestCursorMemoryOversizedCursorrulesSkipsWithWarning is the
+// IMPORTANT A regression test for the legacy .cursorrules file: a
+// >4MiB .cursorrules must be skipped with a warning, not imported as
+// one giant fact.
+func TestCursorMemoryOversizedCursorrulesSkipsWithWarning(t *testing.T) {
+	project := t.TempDir()
+	big := make([]byte, 4*1024*1024+1)
+	for i := range big {
+		big[i] = 'a'
+	}
+	if err := os.WriteFile(filepath.Join(project, ".cursorrules"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := importer.Cursor{}
+
+	facts, warnings, err := src.Memory(importer.ImportCtx{Home: t.TempDir(), ProjectDir: project, ProjectMemory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 0 {
+		t.Fatalf("an oversized .cursorrules must not import as one giant fact, got %+v", facts)
+	}
+	var sawSizeWarning bool
+	for _, w := range warnings {
+		if strings.Contains(w.Path, ".cursorrules") && strings.Contains(w.Reason, "4MiB") {
+			sawSizeWarning = true
+		}
+	}
+	if !sawSizeWarning {
+		t.Fatalf("want a 4MiB warning naming .cursorrules, got %+v", warnings)
+	}
+}
+
 // TestCursorNeverReadsAppDataSQLite is the secret-safety test: a
 // sentinel "state.vscdb" file sits where Cursor's real, undocumented
 // SQLite database would live. Running Skills, Memory, and Detect must

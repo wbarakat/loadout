@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Droid is the import Source for Factory AI's Droid: skills from the
@@ -40,22 +41,34 @@ func (Droid) Detect(ctx ImportCtx) (bool, string) {
 	return true, root
 }
 
-// Skills scans the generic .agents/skills scopes — project, the
+// Skills scans every scope Factory's own docs name for Droid (source
+// map §6): the generic .agents/skills convention — project, the
 // project's repo root, and global, via findGitRoot (codex.go) — plus
-// Droid's own <root>/skills, all through the one shared
-// scanAgentsSkills call, so every scope gets the same vault-owned
-// exclusion and size caps.
+// Droid's own <root>/skills (~/.factory/skills), plus three explicit
+// COMPATIBILITY paths Factory's docs list alongside .agents/skills:
+// the project's own <repo>/.factory/skills, and the SINGULAR
+// ".agent/skills" spelling at both project and global scope
+// (<repo>/.agent/skills, ~/.agent/skills). All of these go through
+// the one shared scanAgentsSkills call, so every scope gets the same
+// vault-owned exclusion and size caps; a directory named twice (a
+// project dir that is also its own git root, for example) is scanned
+// only once — see scanAgentsSkills's own dedup.
 func (Droid) Skills(ctx ImportCtx) ([]CandidateSkill, []Warning, error) {
 	root := droidRoot(ctx)
 
 	var dirs []string
 	if ctx.ProjectDir != "" {
 		dirs = append(dirs, filepath.Join(ctx.ProjectDir, ".agents", "skills"))
+		dirs = append(dirs, filepath.Join(ctx.ProjectDir, ".agent", "skills"))
+		dirs = append(dirs, filepath.Join(ctx.ProjectDir, ".factory", "skills"))
 		if gitRoot := findGitRoot(ctx.ProjectDir); gitRoot != "" && gitRoot != ctx.ProjectDir {
 			dirs = append(dirs, filepath.Join(gitRoot, ".agents", "skills"))
+			dirs = append(dirs, filepath.Join(gitRoot, ".agent", "skills"))
+			dirs = append(dirs, filepath.Join(gitRoot, ".factory", "skills"))
 		}
 	}
 	dirs = append(dirs, filepath.Join(ctx.Home, ".agents", "skills"))
+	dirs = append(dirs, filepath.Join(ctx.Home, ".agent", "skills"))
 	dirs = append(dirs, filepath.Join(root, "skills"))
 
 	skills, warnings := scanAgentsSkills(dirs, "droid", ctx)
@@ -67,11 +80,23 @@ func (Droid) Skills(ctx ImportCtx) ([]CandidateSkill, []Warning, error) {
 // too — one file per directory from the project's repo root
 // (findGitRoot/projectAgentsDirs, both in codex.go) down to
 // ProjectDir. Each project-chain file is read through its own
-// readInstructionMemory call so a directory-based suffix can
-// disambiguate facts between directories that all happen to hold a
-// file named "AGENTS.md" — pathFactBase alone only tells two files
-// apart by their own basename, which is identical at every level of
-// this chain.
+// readInstructionMemory call, then renamed onto the SAME base name
+// Codex's own readCodexAgentsFile (codex.go) gives an AGENTS.md-
+// derived project fact: "agents-md-project" for the repo root, else
+// "agents-md-project-<rel>". Codex and Droid both read a project's
+// AGENTS.md from the same directory chain (source map §6) — under
+// --project-memory the two tools import byte-identical content from
+// the SAME file. For the shared dedup pass (dedup.go, keyed on name
+// plus content hash) to collapse that into one fact instead of two,
+// both tools must land on the identical name for identical content;
+// readInstructionMemory's own generic pathFactBase naming ("agents",
+// from any file called AGENTS.md) does not match Codex's fixed
+// "agents-md-project" base, so this replaces it. A fact's own
+// "-<heading>" suffix, when the file has top-level "##" sections
+// (splitInstructionMemory, memoryfile.go), rides along unchanged: it
+// is always known to appear right after the "agents" base, so
+// stripping that fixed prefix and prepending the Codex-matching base
+// preserves it exactly where Codex would place the same suffix too.
 func (Droid) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 	root := droidRoot(ctx)
 
@@ -83,24 +108,15 @@ func (Droid) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
 		for _, dir := range dirs {
 			path := filepath.Join(dir, "AGENTS.md")
 			pf, pw := readInstructionMemory([]string{path}, "droid")
-			// Every project-chain fact gets a "-project" (or
-			// "-project-<rel>") suffix, even the repo-root file —
-			// without it, the repo root's own AGENTS.md would name
-			// its facts identically to the always-global
-			// ~/.factory/AGENTS.md facts, both being plain "AGENTS.md"
-			// files whose pathFactBase is the same "agents". The
-			// shared dedup pass (dedup.go) would still resolve that
-			// collision correctly, but naming it distinctly here
-			// keeps a direct Memory() call's own result unambiguous.
-			suffix := "-project"
+			base := "agents-md-project"
 			if dir != top {
 				if rel, err := filepath.Rel(top, dir); err == nil {
-					suffix = "-project-" + kebabify(rel)
+					base = "agents-md-project-" + kebabify(rel)
 				}
 			}
 			for i := range pf {
 				pf[i].Type = "project"
-				pf[i].Name += suffix
+				pf[i].Name = base + strings.TrimPrefix(pf[i].Name, "agents")
 			}
 			facts = append(facts, pf...)
 			warnings = append(warnings, pw...)
