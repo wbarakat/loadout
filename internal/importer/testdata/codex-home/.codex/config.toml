@@ -1,0 +1,6 @@
+# fixture only — this file must never be opened by the codex import source.
+sentinel = "SENTINEL-DO-NOT-READ-CONFIG"
+
+[[skills.config]]
+path = "skills/allowed-tool"
+enabled = true
