@@ -24,8 +24,8 @@ func TestHelpExitsZeroAndShowsEveryVerb(t *testing.T) {
 }
 
 func TestStatusJSONHoldsRightCounts(t *testing.T) {
-	setupEnv(t)
-	run(t, "init")
+	base := setupEnv(t)
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "add", "memory", "my-stack")
 	run(t, "sync")
@@ -261,8 +261,8 @@ func TestAddJSON(t *testing.T) {
 }
 
 func TestSyncJSON(t *testing.T) {
-	setupEnv(t)
-	run(t, "init")
+	base := setupEnv(t)
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 
 	out, errOut, code := run(t, "sync", "--json")
@@ -292,7 +292,7 @@ func TestSyncJSON(t *testing.T) {
 // carrying the error that stopped it, instead of vanishing.
 func TestSyncJSONIncludesFailedAdapterReportWithError(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	// A fact whose body holds a loadout mark makes every adapter's
 	// Apply fail at the same scanForMarks check.
 	factPath := filepath.Join(base, "vault", "memory", "bad.md")
@@ -342,8 +342,8 @@ func TestSyncJSONReportArraysAreNeverNull(t *testing.T) {
 }
 
 func TestSyncDryRunJSON(t *testing.T) {
-	setupEnv(t)
-	run(t, "init")
+	base := setupEnv(t)
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "add", "memory", "my-stack")
 	run(t, "sync")
@@ -611,8 +611,8 @@ func TestEditJSONIsAPlainError(t *testing.T) {
 // against the same assertions run_test.go already makes; the rest of
 // run_test.go, unchanged, covers the remaining verbs.
 func TestTextOutputUnchangedWithoutJSON(t *testing.T) {
-	setupEnv(t)
-	run(t, "init")
+	base := setupEnv(t)
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "add", "memory", "my-stack")
 	run(t, "sync")

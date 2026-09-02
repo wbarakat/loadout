@@ -381,6 +381,18 @@ func promptLine(r *bufio.Reader) string {
 // has none to give (it passes nil). Keeping in in the signature lets
 // both entry points share one call shape.
 func runInit(opts initOptions, in io.Reader, out io.Writer) error {
+	// Fail fast: a remote token file that cannot even be opened must
+	// abort before runInit writes anything at all — the vault, its
+	// adapters, an import's drafts. Checking this first, ahead of
+	// ensureVault, is what makes that promise true; checking it only
+	// inside connectRemote (as this used to) let a bad token file
+	// leave a fully mutated, local-only vault behind.
+	if opts.RemoteURL != "" {
+		if err := validateTokenFile(opts.TokenPath); err != nil {
+			return err
+		}
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("could not find the home directory: %v. Fix: set $HOME.", err)
@@ -397,7 +409,7 @@ func runInit(opts initOptions, in io.Reader, out io.Writer) error {
 		fmt.Fprintf(out, "vault already exists at %s\n", v.Root)
 	}
 
-	if err := enableAdapters(v, opts.Tools, detected, out); err != nil {
+	if err := enableAdapters(v, created, opts.Tools, detected, out); err != nil {
 		return err
 	}
 
@@ -421,12 +433,32 @@ func runInit(opts initOptions, in io.Reader, out io.Writer) error {
 // name in tools, using detected's own SkillsDir/MemoryFile for that
 // tool — the same defaults the adapters already use. tools == nil
 // defaults to every tool name detected reports Present for; an
-// explicit empty slice enables nothing and this is a no-op. A name
-// with no matching key in the manifest's Adapters map (droid has no
-// projection adapter anywhere in the codebase: it is an import-only
-// source, not a tool loadout ever projects skills or memory into) is
-// silently skipped: there is no adapter target to configure for it.
-func enableAdapters(v *vault.Vault, tools []string, detected []DetectedTool, out io.Writer) error {
+// explicit empty slice enables nothing. A name with no matching key
+// in the manifest's Adapters map (droid has no projection adapter
+// anywhere in the codebase: it is an import-only source, not a tool
+// loadout ever projects skills or memory into) is silently skipped:
+// there is no adapter target to configure for it, and this is never
+// an error.
+//
+// created decides how the rest of the manifest's adapters — the ones
+// DefaultManifest pre-enables (claude-code, pi) but tools does not
+// name — are treated, and this split is load-bearing:
+//
+//   - created (this run just made the vault): tools is authoritative
+//     for the WHOLE adapter set. Every adapter not in tools is
+//     explicitly DISABLED, even one DefaultManifest pre-enabled. A
+//     fresh install on a pi-less machine must end with pi disabled,
+//     not silently left on from the manifest's own default — a "no
+//     adapters enabled" message must be true, not just what a person
+//     was told.
+//   - not created (an existing vault, a re-run): tools is additive
+//     only. An adapter not in tools is left exactly as the person
+//     already has it — never disabled, never touched. An adapter
+//     already enabled keeps its existing SkillsDir/MemoryFile even
+//     when it is named in tools again, so a hand-customized path
+//     never gets reset back to the detected default; only an adapter
+//     newly enabled by this run adopts the detected default.
+func enableAdapters(v *vault.Vault, created bool, tools []string, detected []DetectedTool, out io.Writer) error {
 	if tools == nil {
 		for _, d := range detected {
 			if d.Present {
@@ -434,34 +466,68 @@ func enableAdapters(v *vault.Vault, tools []string, detected []DetectedTool, out
 			}
 		}
 	}
+	chosen := make(map[string]bool, len(tools))
+	for _, name := range tools {
+		chosen[name] = true
+	}
 
 	byName := make(map[string]DetectedTool, len(detected))
 	for _, d := range detected {
 		byName[d.Name] = d
 	}
 
+	// A freshly created vault always needs its adapter set finalized
+	// and saved, even when tools chooses none at all: DefaultManifest
+	// pre-enables claude-code and pi, and that default must not
+	// survive un-chosen on disk.
+	changed := created
 	var enabled []string
-	for _, name := range tools {
-		cfg, ok := v.Manifest.Adapters[name]
-		if !ok {
-			continue
+	for name, cfg := range v.Manifest.Adapters {
+		switch {
+		case chosen[name]:
+			if created || !cfg.Enabled {
+				// A brand-new vault has nothing customized yet, so a
+				// chosen tool always takes the freshly detected
+				// path. An existing vault only takes it when newly
+				// enabling a tool it did not already have; an
+				// already-enabled tool keeps whatever path a person
+				// may have customized.
+				if d, ok := byName[name]; ok {
+					cfg.SkillsDir = d.SkillsDir
+					cfg.MemoryFile = d.MemoryFile
+				}
+			}
+			if !cfg.Enabled {
+				cfg.Enabled = true
+				changed = true
+			}
+			v.Manifest.Adapters[name] = cfg
+			enabled = append(enabled, name)
+		case created:
+			// Fresh vault, not chosen: disable a pre-enabled default
+			// (pi, claude-code) so the manifest matches exactly what
+			// was chosen or detected — nothing else.
+			if cfg.Enabled {
+				cfg.Enabled = false
+				v.Manifest.Adapters[name] = cfg
+			}
+		default:
+			// Existing vault, not chosen: leave it exactly as the
+			// person already has it. Additive only, never
+			// destructive.
 		}
-		if d, ok := byName[name]; ok {
-			cfg.SkillsDir = d.SkillsDir
-			cfg.MemoryFile = d.MemoryFile
+	}
+	sort.Strings(enabled)
+
+	if changed {
+		if err := vault.SaveManifest(filepath.Join(v.Root, "loadout.toml"), v.Manifest); err != nil {
+			return err
 		}
-		cfg.Enabled = true
-		v.Manifest.Adapters[name] = cfg
-		enabled = append(enabled, name)
 	}
 
 	if len(enabled) == 0 {
 		fmt.Fprintln(out, "no adapters enabled.")
 		return nil
-	}
-	sort.Strings(enabled)
-	if err := vault.SaveManifest(filepath.Join(v.Root, "loadout.toml"), v.Manifest); err != nil {
-		return err
 	}
 	fmt.Fprintf(out, "enabled adapters: %s\n", strings.Join(enabled, ", "))
 	return nil
@@ -517,19 +583,50 @@ func runInitImport(v *vault.Vault, home string, projectMemory bool, out io.Write
 	return nil
 }
 
+// validateTokenFile checks that path names a file runInit can open
+// and read, without reading or returning its content. It exists so
+// runInit can fail fast on a bad --token-file / wizard token path
+// before it writes anything at all (see runInit's own call site).
+//
+// Its error never echoes path. A person can mistakenly pass the
+// token's own VALUE where a PATH belongs — pasting a secret where a
+// filename goes is an easy slip — and os.Open's own error embeds
+// whatever string it was given verbatim (e.g. "open sk-abc123: no
+// such file or directory"). Wrapping that error text, or path itself,
+// in the message this returns would print the secret straight back
+// out. So this names only the flag and the general reason, never the
+// value: see also connectRemote's own token-file errors, which follow
+// the same rule for the same reason.
+func validateTokenFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		reason := "it cannot be opened"
+		switch {
+		case os.IsNotExist(err):
+			reason = "no such file exists"
+		case os.IsPermission(err):
+			reason = "permission was denied"
+		}
+		return fmt.Errorf("the --token-file path is not usable: %s. Fix: pass a path to a file holding the loadoutd token, not the token's own value.", reason)
+	}
+	return f.Close()
+}
+
 // connectRemote reads the token from tokenPath and saves rawURL plus
 // that token as the vault's remote configuration, reusing the same
 // validateRemoteURL check and remote.Save call "loadout remote add"
-// itself uses. It never prints the token: only the url and a fixed
-// success line ever reach out, and the token bytes read from disk are
-// zeroed as soon as they are no longer needed.
+// itself uses. It never prints the token, and never prints tokenPath
+// either — see validateTokenFile's own comment for why an error here
+// must name the flag, never the value a person passed. Only the url
+// and a fixed success line ever reach out, and the token bytes read
+// from disk are zeroed as soon as they are no longer needed.
 func connectRemote(v *vault.Vault, rawURL, tokenPath string, out io.Writer) error {
 	if err := validateRemoteURL(rawURL); err != nil {
 		return err
 	}
 	raw, err := os.ReadFile(tokenPath)
 	if err != nil {
-		return fmt.Errorf("%s: the token file cannot be read: %v. Fix: pass a path to a file holding the loadoutd token.", tokenPath, err)
+		return fmt.Errorf("the token file cannot be read. Fix: pass a path to a file holding the loadoutd token, not the token's own value.")
 	}
 	defer func() {
 		for i := range raw {
@@ -538,7 +635,7 @@ func connectRemote(v *vault.Vault, rawURL, tokenPath string, out io.Writer) erro
 	}()
 	token := strings.TrimSpace(string(raw))
 	if token == "" {
-		return fmt.Errorf("%s: the token file is empty. Fix: put the loadoutd token in that file.", tokenPath)
+		return fmt.Errorf("the token file is empty. Fix: put the loadoutd token in that file.")
 	}
 	if err := remote.Save(v, &remote.Config{URL: rawURL, Token: token}); err != nil {
 		return err

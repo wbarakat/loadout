@@ -263,7 +263,7 @@ func TestDoctorSkipsSecretReadabilityForNoSecretsDevice(t *testing.T) {
 // it, and doctor must still exit 1.
 func TestDoctorNoSecretsDeviceStillReportsOtherProblems(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "sync")
 	if _, errOut, code := runWithStdin(t, dummySecretValue, "secret", "add", "openai-key", "--service", "openai"); code != 0 {

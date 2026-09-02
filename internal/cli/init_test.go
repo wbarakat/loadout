@@ -504,6 +504,132 @@ func TestInitHeadlessBogusToolErrors(t *testing.T) {
 	}
 }
 
+// TestInitHeadlessFreshVaultDisablesUndetectedAdapters proves
+// Important-1's core fix: a fresh vault's chosen set is authoritative
+// for the WHOLE manifest, not just an addition to it. On a home with
+// only claude-code present, the manifest must enable claude-code and
+// explicitly DISABLE every other adapter DefaultManifest pre-enables
+// (pi, plus codex/gemini/cursor/hermes which start disabled anyway)
+// — and a subsequent "loadout sync" must not create pi's skills
+// directory at all, even though a skill exists to link.
+func TestInitHeadlessFreshVaultDisablesUndetectedAdapters(t *testing.T) {
+	home, vaultRoot, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+
+	out, errOut, code := runHeadless(t)
+	if code != 0 {
+		t.Fatalf("init --yes failed: %s", errOut)
+	}
+	if !strings.Contains(out, "enabled adapters: claude-code") {
+		t.Fatalf("must report only claude-code enabled, got %q", out)
+	}
+
+	v, err := vault.Open(vaultRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Manifest.Adapters["claude-code"].Enabled {
+		t.Fatalf("claude-code must be enabled, got %+v", v.Manifest.Adapters["claude-code"])
+	}
+	for _, name := range []string{"pi", "codex", "gemini", "cursor", "hermes"} {
+		if v.Manifest.Adapters[name].Enabled {
+			t.Fatalf("%s must be disabled on a pi-less fresh install, got %+v", name, v.Manifest.Adapters[name])
+		}
+	}
+
+	var addOut, addErr bytes.Buffer
+	if code := Run(&addOut, &addErr, []string{"add", "skill", "deploy-checks"}); code != 0 {
+		t.Fatalf("add skill failed: %s", addErr.String())
+	}
+	var syncOut, syncErr bytes.Buffer
+	if code := Run(&syncOut, &syncErr, []string{"sync"}); code != 0 {
+		t.Fatalf("sync failed: %s", syncErr.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".pi", "agent", "skills")); !os.IsNotExist(err) {
+		t.Fatalf("sync must not create ~/.pi/agent/skills for an undetected, disabled adapter, got err=%v", err)
+	}
+	if _, err := os.Readlink(filepath.Join(home, ".claude", "skills", "deploy-checks")); err != nil {
+		t.Fatalf("sync must still link the skill into the enabled claude-code adapter: %v", err)
+	}
+}
+
+// TestInitHeadlessRerunPreservesCustomSkillsDir proves the sub-rule
+// paired with Important-1's fresh-vault fix: an EXISTING vault's
+// enableAdapters call is additive only, and never resets a
+// hand-customized skills_dir back to the detected default just
+// because the tool is named again on a re-run.
+func TestInitHeadlessRerunPreservesCustomSkillsDir(t *testing.T) {
+	home, vaultRoot, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+
+	if _, errOut, code := runHeadless(t); code != 0 {
+		t.Fatalf("first init --yes failed: %s", errOut)
+	}
+
+	v, err := vault.Open(vaultRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	customDir := filepath.Join(home, "somewhere-else", "skills")
+	cc := v.Manifest.Adapters["claude-code"]
+	cc.SkillsDir = customDir
+	v.Manifest.Adapters["claude-code"] = cc
+	if err := vault.SaveManifest(filepath.Join(vaultRoot, "loadout.toml"), v.Manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, errOut, code := runHeadless(t); code != 0 {
+		t.Fatalf("re-run init --yes failed: %s", errOut)
+	}
+
+	v2, err := vault.Open(vaultRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v2.Manifest.Adapters["claude-code"].SkillsDir; got != customDir {
+		t.Fatalf("a re-run must preserve a customized skills_dir, got %q want %q", got, customDir)
+	}
+}
+
+// TestInitHeadlessTokenFileMissingFailsFastNoVault proves Minor-(a):
+// a token file that cannot even be opened must abort before runInit
+// writes anything at all — no vault, no loadout.toml — rather than
+// failing only after the vault, adapters, and import already ran.
+func TestInitHeadlessTokenFileMissingFailsFastNoVault(t *testing.T) {
+	home, vaultRoot, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+
+	missing := filepath.Join(home, "does-not-exist.txt")
+	out, errOut, code := runHeadless(t, "--remote", "http://localhost:9999", "--token-file", missing)
+	if code == 0 {
+		t.Fatalf("a missing token file must fail, got exit 0, stdout=%q", out)
+	}
+	if !strings.Contains(errOut, "--token-file") {
+		t.Fatalf("the error must name --token-file, got %q", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(vaultRoot, "loadout.toml")); !os.IsNotExist(err) {
+		t.Fatalf("a bad token file must create no vault at all, got err=%v", err)
+	}
+}
+
+// TestInitHeadlessTokenFileErrorNeverEchoesTheProvidedValue proves
+// Minor-(b): a person who mistakenly passes the token's own VALUE
+// where the --token-file PATH belongs must never see that value
+// echoed back in the resulting error.
+func TestInitHeadlessTokenFileErrorNeverEchoesTheProvidedValue(t *testing.T) {
+	home, _, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+
+	const mistakenValue = "sk-this-looks-like-a-token-not-a-path-8f2c1a"
+	out, errOut, code := runHeadless(t, "--remote", "http://localhost:9999", "--token-file", mistakenValue)
+	if code == 0 {
+		t.Fatalf("a nonexistent token-file path must fail, got exit 0, stdout=%q", out)
+	}
+	if strings.Contains(errOut, mistakenValue) {
+		t.Fatalf("the error must never echo the provided --token-file value, got %q", errOut)
+	}
+}
+
 // TestInitHelpNamesHeadlessFlags proves "loadout help" documents every
 // headless flag, not just the wizard's own prose.
 func TestInitHelpNamesHeadlessFlags(t *testing.T) {

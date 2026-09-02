@@ -141,13 +141,13 @@ func syncLocal(v *vault.Vault, out, errOut io.Writer, dry bool, m mode) ([]adapt
 		reports = append(reports, report)
 		if m != modeJSON {
 			if dry {
-				line := fmt.Sprintf("would sync %s (%d to link, %d to prune", a.Name(), report.Linked, len(report.Pruned))
+				line := fmt.Sprintf("would sync %s (%d to link, %d to adopt, %d to prune", a.Name(), report.Linked, len(report.Adopted), len(report.Pruned))
 				if status := memoryStatus(report.Applied); status != "" {
 					line += "; memory: " + status
 				}
 				fmt.Fprintln(out, line+")")
 			} else {
-				fmt.Fprintf(out, "synced %s (%d linked, %d pruned)\n", a.Name(), report.Linked, len(report.Pruned))
+				fmt.Fprintf(out, "synced %s (%d linked, %d adopted, %d pruned)\n", a.Name(), report.Linked, len(report.Adopted), len(report.Pruned))
 			}
 		}
 		for _, b := range report.Blocked {

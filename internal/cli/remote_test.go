@@ -237,7 +237,7 @@ func TestSyncRemoteRunsLocalProjectionAndSyncsRemotely(t *testing.T) {
 
 	baseA := newDeviceEnv(t)
 	useDeviceEnv(t, baseA)
-	run(t, "init")
+	initClaudeAndPi(t, baseA)
 	run(t, "add", "skill", "deploy-checks")
 	if _, errOut, code := run(t, "remote", "add", ts.URL, token); code != 0 {
 		t.Fatalf("remote add on A failed: %s", errOut)
@@ -245,7 +245,7 @@ func TestSyncRemoteRunsLocalProjectionAndSyncsRemotely(t *testing.T) {
 
 	baseB := newDeviceEnv(t)
 	useDeviceEnv(t, baseB)
-	run(t, "init")
+	initClaudeAndPi(t, baseB)
 	if _, errOut, code := run(t, "remote", "add", ts.URL, token); code != 0 {
 		t.Fatalf("remote add on B failed: %s", errOut)
 	}

@@ -29,6 +29,45 @@ func setupEnv(t *testing.T) string {
 	return base
 }
 
+// initClaudeAndPi runs a headless "loadout init --yes" against base's
+// fixture home, after marking claude-code and pi present (empty
+// ~/.claude and ~/.pi/agent root directories). It ends with exactly
+// those two adapters enabled — this package's stand-in for a real
+// person's own machine having both tools installed and choosing to
+// enable an adapter for each at the wizard's prompt.
+//
+// This exists because a bare "loadout init" (no "--yes") drives the
+// real interactive wizard against this test binary's actual os.Stdin,
+// which reads no answers at all (an immediate EOF) and so declines
+// every prompt, including "enable adapters?" — same as a real person
+// hitting Ctrl-D at the very first question. Before Important-1's
+// fix, that declined answer still left claude-code and pi enabled,
+// because DefaultManifest pre-enables both and the old enableAdapters
+// never disabled an adapter outside the chosen set. Now a freshly
+// created vault's chosen set is authoritative — a decline really
+// means no adapters at all — so any test whose own sync/status/doctor
+// assertions need a working claude-code+pi projection must choose
+// them explicitly, exactly as this helper does.
+func initClaudeAndPi(t *testing.T, base string) {
+	t.Helper()
+	home := filepath.Join(base, "home")
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".pi", "agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// --tools names the pair explicitly rather than relying on the
+	// nil-default "every detected tool": this test binary's real
+	// os.Stdin/PATH is not stubbed the way package cli's own init
+	// tests stub initLookPath, so a contributor's own machine
+	// genuinely having claude/codex/pi/... on PATH must never change
+	// which adapters this helper enables.
+	if _, errOut, code := run(t, "init", "--yes", "--tools", "claude-code,pi"); code != 0 {
+		t.Fatalf("init --yes failed: %s", errOut)
+	}
+}
+
 func TestUsage(t *testing.T) {
 	setupEnv(t)
 	_, errOut, code := run(t)
@@ -160,7 +199,7 @@ func TestAddIsTransactionalWhenHistoryFails(t *testing.T) {
 
 func TestSyncProjectsVault(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "add", "memory", "my-stack")
 
@@ -187,7 +226,7 @@ func TestSyncProjectsVault(t *testing.T) {
 
 func TestSyncDryRunFreshVaultLeavesHomeUntouched(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "add", "memory", "my-stack")
 
@@ -195,10 +234,10 @@ func TestSyncDryRunFreshVaultLeavesHomeUntouched(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("sync --dry-run failed: %s", errOut)
 	}
-	if !strings.Contains(out, "would sync claude-code (1 to link, 0 to prune; memory: block would change)") {
+	if !strings.Contains(out, "would sync claude-code (1 to link, 0 to adopt, 0 to prune; memory: block would change)") {
 		t.Fatalf("bad dry-run output: %q", out)
 	}
-	if !strings.Contains(out, "would sync pi (1 to link, 0 to prune; memory: block would change)") {
+	if !strings.Contains(out, "would sync pi (1 to link, 0 to adopt, 0 to prune; memory: block would change)") {
 		t.Fatalf("bad dry-run output: %q", out)
 	}
 	home := filepath.Join(base, "home")
@@ -222,8 +261,8 @@ func TestSyncDryRunFreshVaultLeavesHomeUntouched(t *testing.T) {
 }
 
 func TestSyncDryRunAfterRealSyncReportsUpToDate(t *testing.T) {
-	setupEnv(t)
-	run(t, "init")
+	base := setupEnv(t)
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "add", "memory", "my-stack")
 	run(t, "sync")
@@ -232,17 +271,17 @@ func TestSyncDryRunAfterRealSyncReportsUpToDate(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("sync --dry-run failed: %s", errOut)
 	}
-	if !strings.Contains(out, "would sync claude-code (0 to link, 0 to prune; memory: up to date)") {
+	if !strings.Contains(out, "would sync claude-code (0 to link, 0 to adopt, 0 to prune; memory: up to date)") {
 		t.Fatalf("bad dry-run output: %q", out)
 	}
-	if !strings.Contains(out, "would sync pi (0 to link, 0 to prune; memory: up to date)") {
+	if !strings.Contains(out, "would sync pi (0 to link, 0 to adopt, 0 to prune; memory: up to date)") {
 		t.Fatalf("bad dry-run output: %q", out)
 	}
 }
 
 func TestSyncDryRunReportsBlockedPathAndExitsZero(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 
 	home := filepath.Join(base, "home")
@@ -258,14 +297,14 @@ func TestSyncDryRunReportsBlockedPathAndExitsZero(t *testing.T) {
 	if !strings.Contains(errOut, blockedPath) {
 		t.Fatalf("errOut must name the blocked path in the dry report, got %q", errOut)
 	}
-	if !strings.Contains(out, "would sync claude-code (0 to link, 0 to prune; memory: block would change)") {
+	if !strings.Contains(out, "would sync claude-code (0 to link, 0 to adopt, 0 to prune; memory: block would change)") {
 		t.Fatalf("bad dry-run output: %q", out)
 	}
 }
 
 func TestSyncDryRunReportsDamagedMarksAndExitsOne(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 
 	home := filepath.Join(base, "home")
@@ -317,7 +356,7 @@ func TestSyncDryRunFlagAcceptedInAnyPosition(t *testing.T) {
 // TestSyncDryRunMemoryNoneAdapterOmitsMemoryClause proves a memoryNone
 // adapter's dry line carries no dangling "; memory: " clause: cursor
 // never reports a memory status, so the line must read exactly
-// "would sync cursor (N to link, M to prune)", with no clause at all.
+// "would sync cursor (N to link, M to adopt, M to prune)", with no clause at all.
 func TestSyncDryRunMemoryNoneAdapterOmitsMemoryClause(t *testing.T) {
 	base := setupEnv(t)
 	run(t, "init")
@@ -331,17 +370,17 @@ func TestSyncDryRunMemoryNoneAdapterOmitsMemoryClause(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("sync --dry-run failed: %s", errOut)
 	}
-	if !strings.Contains(out, "would sync cursor (1 to link, 0 to prune)\n") {
+	if !strings.Contains(out, "would sync cursor (1 to link, 0 to adopt, 0 to prune)\n") {
 		t.Fatalf("a memoryNone adapter's dry line must omit the memory clause, got %q", out)
 	}
-	if strings.Contains(out, "would sync cursor (1 to link, 0 to prune;") {
+	if strings.Contains(out, "would sync cursor (1 to link, 0 to adopt, 0 to prune;") {
 		t.Fatalf("a memoryNone adapter's dry line must carry no memory clause at all, got %q", out)
 	}
 }
 
 func TestSyncLinksSymlinkedSkillDir(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 
 	vaultRoot := filepath.Join(base, "vault")
@@ -361,9 +400,57 @@ func TestSyncLinksSymlinkedSkillDir(t *testing.T) {
 	}
 }
 
+// TestSyncTextReportsAdoptedCount proves Important-2's fix: a sync
+// that adopts a foreign symlink must name the adopted count in its
+// text output — both the dry-run preview and the real sync line —
+// instead of staying silent about it the way "synced claude-code (0
+// linked, 0 pruned)" did before the fix.
+func TestSyncTextReportsAdoptedCount(t *testing.T) {
+	base := setupEnv(t)
+	initClaudeAndPi(t, base)
+	run(t, "add", "skill", "deploy-checks")
+
+	home := filepath.Join(base, "home")
+	// A symlink made before loadout ever ran, pointing somewhere else
+	// entirely — the same shape a real tool's own pre-existing wiring
+	// takes.
+	foreignTarget := filepath.Join(base, "foreign", "deploy-checks")
+	if err := os.MkdirAll(foreignTarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(home, ".claude", "skills", "deploy-checks")
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(foreignTarget, linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	dryOut, errOut, code := run(t, "sync", "--dry-run")
+	if code != 0 {
+		t.Fatalf("sync --dry-run failed: %s", errOut)
+	}
+	if !strings.Contains(dryOut, "would sync claude-code (0 to link, 1 to adopt, 0 to prune") {
+		t.Fatalf("the dry-run text must name the pending adoption, got %q", dryOut)
+	}
+
+	out, errOut, code := run(t, "sync")
+	if code != 0 {
+		t.Fatalf("sync failed: %s", errOut)
+	}
+	if !strings.Contains(out, "synced claude-code (0 linked, 1 adopted, 0 pruned)") {
+		t.Fatalf("the text report must name the adopted count, got %q", out)
+	}
+
+	got, err := os.Readlink(linkPath)
+	if err != nil || got != filepath.Join(base, "vault", "skills", "deploy-checks") {
+		t.Fatalf("the link must now point into the vault: got %q err=%v", got, err)
+	}
+}
+
 func TestSyncContinuesAfterAdapterFailure(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "add", "memory", "my-stack")
 
@@ -392,7 +479,7 @@ func TestSyncContinuesAfterAdapterFailure(t *testing.T) {
 
 func TestSyncExitsOneOnBlocked(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "add", "memory", "my-stack")
 
@@ -411,14 +498,14 @@ func TestSyncExitsOneOnBlocked(t *testing.T) {
 	if !strings.Contains(errOut, blockedPath) {
 		t.Fatalf("errOut must name the blocked address, got %q", errOut)
 	}
-	if !strings.Contains(out, "synced pi (0 linked, 0 pruned)") {
+	if !strings.Contains(out, "synced pi (0 linked, 0 adopted, 0 pruned)") {
 		t.Fatalf("sync must report zero linked skills for pi despite the memory write, got %q", out)
 	}
 }
 
 func TestStatusAndDoctor(t *testing.T) {
-	setupEnv(t)
-	run(t, "init")
+	base := setupEnv(t)
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "add", "memory", "my-stack")
 
@@ -496,7 +583,7 @@ func TestDoctorReportsMemoryFileIgnoredOnMemoryNoneAdapter(t *testing.T) {
 // and doctor goes quiet again.
 func TestDoctorReportsStaleLinkAfterSkillDeleted(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "sync")
 
@@ -1237,7 +1324,7 @@ func TestContextOnMissingHistoryGivesFixedMessage(t *testing.T) {
 // itself, not the dead-end "run: loadout sync".
 func TestDoctorReportsDamagedMarksWithRepairFix(t *testing.T) {
 	base := setupEnv(t)
-	run(t, "init")
+	initClaudeAndPi(t, base)
 	run(t, "add", "skill", "deploy-checks")
 	run(t, "sync")
 
