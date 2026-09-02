@@ -221,15 +221,17 @@ export function ConnectForm(props: {
 
   return (
     <form
-      className="mx-auto max-w-md space-y-6 rounded-lg border border-slate-300 bg-white p-6"
+      className="mx-auto w-full max-w-md space-y-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
       onSubmit={(e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         void handleConnect();
       }}
     >
       <div>
-        <h1 className="text-lg font-semibold text-slate-900">Connect to loadoutd</h1>
-        <p className="text-sm text-slate-600">
+        <h1 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+          Connect to loadoutd
+        </h1>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           Enter your loadoutd address and token. Add a device key. Then
           register this browser.
         </p>
@@ -237,7 +239,10 @@ export function ConnectForm(props: {
 
       <div className="space-y-4">
         <div>
-          <label htmlFor="baseUrl" className="block text-sm font-medium text-slate-800">
+          <label
+            htmlFor="baseUrl"
+            className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+          >
             loadoutd URL
           </label>
           <input
@@ -247,12 +252,15 @@ export function ConnectForm(props: {
             value={baseUrl}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setBaseUrl(e.target.value)}
             placeholder="http://100.x.x.x:7777"
-            className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            className="ld-focus mt-1.5 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-600"
           />
         </div>
 
         <div>
-          <label htmlFor="token" className="block text-sm font-medium text-slate-800">
+          <label
+            htmlFor="token"
+            className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+          >
             Bearer token
           </label>
           <input
@@ -262,12 +270,15 @@ export function ConnectForm(props: {
             autoComplete="off"
             value={token}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setToken(e.target.value)}
-            className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            className="ld-focus mt-1.5 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           />
         </div>
 
         <div>
-          <label htmlFor="deviceName" className="block text-sm font-medium text-slate-800">
+          <label
+            htmlFor="deviceName"
+            className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+          >
             Device name
           </label>
           <input
@@ -276,18 +287,18 @@ export function ConnectForm(props: {
             value={deviceName}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setDeviceName(e.target.value)}
             aria-invalid={!deviceNameValid}
-            className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            className="ld-focus mt-1.5 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           />
           {!deviceNameValid ? (
-            <p className="mt-1 text-sm text-red-700">{DEVICE_NAME_ERROR}</p>
+            <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">{DEVICE_NAME_ERROR}</p>
           ) : null}
         </div>
       </div>
 
-      <div className="space-y-3 border-t border-slate-200 pt-4">
+      <div className="space-y-3 border-t border-slate-200 pt-5 dark:border-slate-800">
         {!hasKey ? (
           <div className="space-y-3">
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-slate-500 dark:text-slate-400">
               Add a device key. Generate a new one, or paste one you
               already have.
             </p>
@@ -296,7 +307,7 @@ export function ConnectForm(props: {
               onClick={() => {
                 void handleGenerateKey();
               }}
-              className="rounded bg-slate-800 px-3 py-2 text-sm font-medium text-white hover:bg-slate-900"
+              className="ld-focus rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
             >
               Generate key
             </button>
@@ -304,7 +315,7 @@ export function ConnectForm(props: {
             <div>
               <label
                 htmlFor="importIdentity"
-                className="block text-sm font-medium text-slate-800"
+                className="block text-sm font-medium text-slate-700 dark:text-slate-300"
               >
                 Or paste an existing identity
               </label>
@@ -316,32 +327,36 @@ export function ConnectForm(props: {
                   setImportText(e.target.value)
                 }
                 placeholder="AGE-SECRET-KEY-1..."
-                className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"
+                className="ld-focus mt-1.5 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
               />
               <button
                 type="button"
                 onClick={() => {
                   void handleImportIdentity();
                 }}
-                className="mt-2 rounded border border-slate-300 px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-100"
+                className="ld-focus mt-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
               >
                 Import identity
               </button>
             </div>
 
-            {keyError ? <p className="text-sm text-red-700">{keyError}</p> : null}
+            {keyError ? (
+              <p className="text-sm text-red-600 dark:text-red-400">{keyError}</p>
+            ) : null}
           </div>
         ) : (
           <div className="space-y-3">
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-slate-500 dark:text-slate-400">
               This is your device key. It can read the vault, but never a
               secret value.
             </p>
 
             <div>
-              <div className="text-xs font-medium text-slate-800">Device recipient</div>
-              <div className="mt-1 flex items-center gap-2">
-                <code className="min-w-0 flex-1 truncate rounded bg-slate-100 px-2 py-1 text-xs text-slate-800">
+              <div className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                Device recipient
+              </div>
+              <div className="mt-1.5 flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200">
                   {recipient}
                 </code>
                 <CopyButton value={recipient} label="Copy recipient" />
@@ -349,22 +364,24 @@ export function ConnectForm(props: {
             </div>
 
             <div>
-              <div className="text-xs font-medium text-slate-800">Approve command</div>
+              <div className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                Approve command
+              </div>
               {command !== null ? (
                 <>
-                  <div className="mt-1 flex items-center gap-2">
-                    <code className="min-w-0 flex-1 truncate rounded bg-slate-100 px-2 py-1 text-xs text-slate-800">
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <code className="min-w-0 flex-1 truncate rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200">
                       {command}
                     </code>
                     <CopyButton value={command} label="Copy approve command" />
                   </div>
-                  <p className="mt-1 text-xs text-slate-500">
+                  <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
                     Run this on an approved device, such as your Mac, before
                     you connect.
                   </p>
                 </>
               ) : (
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="mt-1.5 text-xs text-slate-400 dark:text-slate-500">
                   Fix the device name above to see the approve command.
                 </p>
               )}
@@ -377,7 +394,7 @@ export function ConnectForm(props: {
                 setRecipient("");
                 setKeyError(null);
               }}
-              className="text-xs font-medium text-slate-500 underline hover:text-slate-700"
+              className="ld-focus rounded text-xs font-medium text-slate-400 underline hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
             >
               Use a different key
             </button>
@@ -386,7 +403,7 @@ export function ConnectForm(props: {
       </div>
 
       {connectError ? (
-        <p className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+        <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-500/10 dark:text-red-300">
           {connectError}
         </p>
       ) : null}
@@ -394,7 +411,7 @@ export function ConnectForm(props: {
       <button
         type="submit"
         disabled={!canConnect}
-        className="w-full rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+        className="ld-focus w-full rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 dark:bg-blue-500 dark:hover:bg-blue-400 dark:disabled:bg-slate-800 dark:disabled:text-slate-600"
       >
         {connecting ? "Connecting…" : "Register + Connect"}
       </button>

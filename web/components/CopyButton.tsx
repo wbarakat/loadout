@@ -32,7 +32,11 @@ export function CopyButton(props: { value: string; label: string }): JSX.Element
       onClick={() => {
         void handleClick();
       }}
-      className="shrink-0 rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+      className={`ld-focus shrink-0 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+        copied
+          ? "border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-400"
+          : "border-slate-300 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+      }`}
     >
       {copied ? "Copied" : props.label}
     </button>

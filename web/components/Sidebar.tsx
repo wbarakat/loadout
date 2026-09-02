@@ -32,7 +32,10 @@ export function Sidebar(props: {
   onSelect: (s: Section) => void;
 }): JSX.Element {
   return (
-    <nav aria-label="Sections" className="w-48 shrink-0 space-y-1 border-r border-slate-200 bg-slate-50 p-3">
+    <nav
+      aria-label="Sections"
+      className="flex w-56 shrink-0 flex-col gap-0.5 border-r border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900"
+    >
       {NAV_ITEMS.map((item) => {
         const isActive = item.id === props.active;
         const count = item.id === "settings" ? undefined : props.counts[item.id];
@@ -42,16 +45,20 @@ export function Sidebar(props: {
             type="button"
             aria-current={isActive ? "page" : undefined}
             onClick={() => props.onSelect(item.id)}
-            className={`flex w-full items-center justify-between rounded px-3 py-2 text-sm font-medium ${
-              isActive ? "bg-slate-800 text-white" : "text-slate-700 hover:bg-slate-200"
+            className={`ld-focus flex w-full items-center justify-between rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+              isActive
+                ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900"
+                : "text-slate-600 hover:bg-slate-200/70 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
             }`}
           >
             <span>{item.label}</span>
             {count !== undefined ? (
               <span
                 aria-hidden="true"
-                className={`rounded-full px-2 py-0.5 text-xs ${
-                  isActive ? "bg-slate-600 text-white" : "bg-slate-200 text-slate-700"
+                className={`rounded-full px-2 py-0.5 text-xs tabular-nums ${
+                  isActive
+                    ? "bg-white/15 text-white dark:bg-slate-900/10 dark:text-slate-900"
+                    : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
                 }`}
               >
                 {count}

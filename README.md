@@ -548,3 +548,60 @@ can decrypt what the server holds.
 See PLAN.md section 11 for the v1 trust boundary: a snapshot is
 encrypted, but not signed, so a bearer-token holder can push content
 that enrolled devices will merge.
+
+## Dashboard
+
+The dashboard is a browser tab that shows your skills and your memory.
+It runs as a static site, with no server of its own. Every byte of
+vault traffic goes straight from your browser to your own `loadoutd`.
+No third party ever touches your vault, your key, or your token.
+
+The dashboard enrolls as a no-secrets device (see "Device roles"
+above). It can read every skill and every memory fact. It can never
+read a secret's value. A secret shows its metadata only: its name,
+its service, and other fields such as `rotate_after`. To read a
+secret's value, use a full device, or `loadout secret show --reveal`
+on the CLI.
+
+The dashboard keeps its connection details — the `loadoutd` address,
+the token, and the no-secrets device key — in your browser's local
+storage. This is safe for a no-secrets key: it can never decrypt a
+secret, even if someone reads it from your browser's storage.
+
+### Set up the dashboard
+
+Run `loadoutd` on a machine you trust, such as your Mac. It needs a
+data directory:
+
+    go build -o loadoutd ./cmd/loadoutd
+    ./loadoutd -data /var/lib/loadout
+
+A browser page served over HTTPS cannot call a plain `http://`
+address. This is the browser's own mixed-content rule, not a Loadout
+rule. Put an HTTPS URL in front of `loadoutd` with a tool such as
+`portless`, then note that URL.
+
+Start `loadoutd` again, this time with `-cors-origin` set to the
+dashboard's own URL (for example, the URL Vercel gives your deployed
+dashboard). Without this flag, `loadoutd` sends no CORS headers, and
+the browser blocks every call the dashboard makes to it:
+
+    ./loadoutd -data /var/lib/loadout -cors-origin https://your-dashboard.example.com
+
+Open the dashboard in your browser. Enter the `loadoutd` URL and the
+access token `loadoutd` printed on its first run. Click "Generate
+key". The dashboard shows a recipient and an approve command.
+
+Run the approve command on an already-approved device, such as your
+Mac:
+
+    loadout devices approve dashboard --no-secrets
+
+Back in the dashboard, click "Register + Connect". The dashboard
+pulls the vault, decrypts it in your browser, and shows your skills
+and your memory. From here you can browse, search, read a secret's
+metadata, edit a skill or a memory fact, and keep a draft item — the
+same review flow the CLI uses.
+
+See `docs/dashboard-smoke.md` for the full manual check to run against
+a real `loadoutd` once the dashboard is deployed.

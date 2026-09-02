@@ -1,3 +1,86 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* The dashboard supports light and dark mode through `prefers-color-scheme`
+   (Tailwind's default `dark:` strategy — no toggle, no stored preference).
+   `color-scheme` tells the browser to pick matching native colors for
+   scrollbars, form controls, and the default page background. */
+:root {
+  color-scheme: light dark;
+}
+
+@layer base {
+  body {
+    @apply bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+  }
+}
+
+@layer components {
+  /* A single focus-ring recipe for every interactive control: a button, a
+     link, an input, a textarea, a list row. `ring-inset` keeps the ring
+     inside the element's own border in both color schemes, so it never
+     needs a matching ring-offset color per background. */
+  .ld-focus {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 dark:focus-visible:ring-blue-400;
+  }
+
+  /* Hand-rolled Markdown typography for an item's body. Scoped to this one
+     class so it never leaks into the rest of the app, and so the project
+     does not need the `@tailwindcss/typography` plugin for one prose
+     block. */
+  .ld-prose {
+    @apply max-w-3xl text-sm leading-relaxed text-slate-800 dark:text-slate-200;
+  }
+  .ld-prose > *:first-child {
+    @apply mt-0;
+  }
+  .ld-prose h1 {
+    @apply mb-2 mt-6 text-lg font-semibold text-slate-900 dark:text-slate-50;
+  }
+  .ld-prose h2 {
+    @apply mb-2 mt-5 text-base font-semibold text-slate-900 dark:text-slate-50;
+  }
+  .ld-prose h3 {
+    @apply mb-1.5 mt-4 text-sm font-semibold text-slate-900 dark:text-slate-50;
+  }
+  .ld-prose p {
+    @apply my-2;
+  }
+  .ld-prose ul {
+    @apply my-2 ml-5 list-disc space-y-1;
+  }
+  .ld-prose ol {
+    @apply my-2 ml-5 list-decimal space-y-1;
+  }
+  .ld-prose li > p {
+    @apply my-0;
+  }
+  .ld-prose a {
+    @apply text-blue-700 underline decoration-blue-300 underline-offset-2 hover:decoration-blue-600 dark:text-blue-400 dark:decoration-blue-800 dark:hover:decoration-blue-400;
+  }
+  .ld-prose code {
+    @apply rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.85em] text-slate-800 dark:bg-slate-800 dark:text-slate-200;
+  }
+  .ld-prose pre {
+    @apply my-3 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900;
+  }
+  .ld-prose pre code {
+    @apply bg-transparent p-0;
+  }
+  .ld-prose blockquote {
+    @apply my-3 border-l-2 border-slate-300 pl-3 text-slate-600 dark:border-slate-700 dark:text-slate-400;
+  }
+  .ld-prose hr {
+    @apply my-4 border-slate-200 dark:border-slate-800;
+  }
+  .ld-prose table {
+    @apply my-3 w-full border-collapse text-sm;
+  }
+  .ld-prose th {
+    @apply border border-slate-200 bg-slate-50 px-2 py-1 text-left font-medium dark:border-slate-800 dark:bg-slate-900;
+  }
+  .ld-prose td {
+    @apply border border-slate-200 px-2 py-1 dark:border-slate-800;
+  }
+}

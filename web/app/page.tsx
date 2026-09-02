@@ -127,6 +127,17 @@ function rowsFor(section: Section, vault: Vault): ListRow[] {
 /** Renders the detail pane for the selected address: `ItemDetail` for a
  * skill/memory (with Edit and, for a draft, Keep wired in), `SecretDetail`
  * (metadata only, no value, no Edit/Keep) for a secret. */
+/** The placeholder shown in the detail pane before any row is selected, or
+ * when a selected address no longer resolves to an item. Centered in the
+ * pane, not just left-aligned at its top. */
+function emptySelection(): JSX.Element {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <p className="text-sm text-slate-400 dark:text-slate-500">Select an item to view it.</p>
+    </div>
+  );
+}
+
 function renderDetail(
   vault: Vault,
   selectedAddress: string | undefined,
@@ -134,21 +145,21 @@ function renderDetail(
   onKeep: (item: Item) => Promise<void>,
 ): JSX.Element {
   if (selectedAddress === undefined) {
-    return <p className="text-sm text-slate-400">Select an item to view it.</p>;
+    return emptySelection();
   }
 
   if (selectedAddress.startsWith("secret/")) {
     const name = selectedAddress.slice("secret/".length);
     const secret = vault.secrets.find((s) => s.name === name);
     if (secret === undefined) {
-      return <p className="text-sm text-slate-400">Select an item to view it.</p>;
+      return emptySelection();
     }
     return <SecretDetail secret={secret} />;
   }
 
   const item = vault.items.find((i) => i.address === selectedAddress);
   if (item === undefined) {
-    return <p className="text-sm text-slate-400">Select an item to view it.</p>;
+    return emptySelection();
   }
   return <ItemDetail item={item} onEdit={onEdit} onKeep={onKeep} />;
 }
@@ -310,12 +321,16 @@ export default function Home(): JSX.Element {
   }
 
   if (phase.kind === "loading") {
-    return <p className="p-6 text-sm text-slate-600">Loading…</p>;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white dark:bg-slate-950">
+        <p className="text-sm text-slate-400 dark:text-slate-500">Loading…</p>
+      </div>
+    );
   }
 
   if (phase.kind === "no-config") {
     return (
-      <div className="p-6">
+      <div className="flex min-h-screen items-center justify-center bg-white p-6 dark:bg-slate-950">
         <ConnectForm onConnected={handleConnected} />
       </div>
     );
@@ -323,7 +338,7 @@ export default function Home(): JSX.Element {
 
   if (phase.kind === "not-approved") {
     return (
-      <div className="p-6">
+      <div className="flex min-h-screen items-center justify-center bg-white p-6 dark:bg-slate-950">
         <NotApproved
           recipient={phase.recipient}
           deviceName={phase.deviceName}
@@ -335,7 +350,7 @@ export default function Home(): JSX.Element {
 
   if (phase.kind === "empty") {
     return (
-      <div className="p-6">
+      <div className="flex min-h-screen items-center justify-center bg-white p-6 dark:bg-slate-950">
         <EmptyVault onRetry={handleRetry} />
       </div>
     );
@@ -343,16 +358,20 @@ export default function Home(): JSX.Element {
 
   if (phase.kind === "error") {
     return (
-      <div className="mx-auto max-w-md space-y-4 p-6 text-center">
-        <h2 className="text-lg font-semibold text-red-800">Something went wrong</h2>
-        <p className="text-sm text-red-700">{phase.message}</p>
-        <button
-          type="button"
-          onClick={handleReconnect}
-          className="rounded bg-slate-700 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-        >
-          Reconnect / Settings
-        </button>
+      <div className="flex min-h-screen items-center justify-center bg-white p-6 dark:bg-slate-950">
+        <div className="mx-auto max-w-md space-y-4 rounded-xl border border-red-200 bg-red-50 p-6 text-center dark:border-red-900/50 dark:bg-red-500/10">
+          <h2 className="text-lg font-semibold text-red-800 dark:text-red-300">
+            Something went wrong
+          </h2>
+          <p className="text-sm text-red-700 dark:text-red-400">{phase.message}</p>
+          <button
+            type="button"
+            onClick={handleReconnect}
+            className="ld-focus rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+          >
+            Reconnect / Settings
+          </button>
+        </div>
       </div>
     );
   }
@@ -368,14 +387,27 @@ export default function Home(): JSX.Element {
       : vault.items.find((i) => i.address === editingAddress);
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-screen flex-col bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      <header className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-4 py-2.5 dark:border-slate-800">
+        <span className="text-sm font-semibold tracking-tight">Loadout</span>
+        {config !== null ? (
+          <>
+            <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">
+              ·
+            </span>
+            <span className="truncate text-xs text-slate-500 dark:text-slate-400">
+              {config.baseUrl}
+            </span>
+          </>
+        ) : null}
+      </header>
       {toast !== undefined ? (
-        <div className="flex items-center justify-between gap-4 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+        <div className="flex items-center justify-between gap-4 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-500/10 dark:text-amber-200">
           <span>{toast}</span>
           <button
             type="button"
             onClick={() => setToast(undefined)}
-            className="shrink-0 text-xs font-medium underline"
+            className="ld-focus shrink-0 rounded text-xs font-medium underline"
           >
             Dismiss
           </button>
@@ -393,7 +425,7 @@ export default function Home(): JSX.Element {
           </div>
         ) : (
           <>
-            <div className="w-80 shrink-0 border-r border-slate-200">
+            <div className="w-80 shrink-0 border-r border-slate-200 dark:border-slate-800">
               <ItemList
                 rows={rows}
                 selectedAddress={selectedAddress}

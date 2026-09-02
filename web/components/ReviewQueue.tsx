@@ -23,26 +23,26 @@ export function ReviewQueue(props: {
   onKeep: (item: Item) => Promise<void>;
 }): JSX.Element {
   if (props.drafts.length === 0) {
-    return <p className="text-sm text-slate-400">No drafts to review.</p>;
+    return <p className="text-sm text-slate-400 dark:text-slate-500">No drafts to review.</p>;
   }
 
   return (
-    <ul className="space-y-2">
+    <ul className="mx-auto max-w-2xl space-y-2">
       {props.drafts.map((item) => (
         <li
           key={item.address}
-          className="flex items-center justify-between gap-4 rounded border border-slate-200 p-3"
+          className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 p-3 dark:border-slate-800"
         >
           <div className="min-w-0">
-            <div className="text-sm font-medium text-slate-900">
+            <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
               {nameFromAddress(item.address)}
             </div>
-            <div className="truncate text-xs text-slate-600">{item.hook}</div>
+            <div className="truncate text-xs text-slate-500 dark:text-slate-400">{item.hook}</div>
           </div>
           <button
             type="button"
             onClick={() => void props.onKeep(item)}
-            className="shrink-0 rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
+            className="ld-focus shrink-0 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-700 dark:hover:bg-emerald-500"
           >
             Keep
           </button>

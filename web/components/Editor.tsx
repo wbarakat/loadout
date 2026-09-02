@@ -24,8 +24,8 @@ export function Editor(props: {
   const saving = props.saving ?? false;
 
   return (
-    <div className="space-y-3">
-      <h2 className="text-lg font-semibold text-slate-900">
+    <div className="mx-auto max-w-3xl space-y-3">
+      <h2 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-50">
         Edit {props.item.address}
       </h2>
       <textarea
@@ -33,14 +33,14 @@ export function Editor(props: {
         onChange={(e) => setText(e.target.value)}
         disabled={saving}
         rows={20}
-        className="w-full rounded border border-slate-300 p-3 font-mono text-sm text-slate-800 disabled:bg-slate-50"
+        className="ld-focus w-full rounded-lg border border-slate-300 bg-white p-3 font-mono text-sm text-slate-800 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:disabled:bg-slate-950"
       />
       <div className="flex gap-2">
         <button
           type="button"
           onClick={() => void props.onSave(text)}
           disabled={saving}
-          className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+          className="ld-focus rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-emerald-500"
         >
           {saving ? "Saving" : "Save"}
         </button>
@@ -48,7 +48,7 @@ export function Editor(props: {
           type="button"
           onClick={props.onCancel}
           disabled={saving}
-          className="rounded bg-slate-200 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-300 disabled:opacity-50"
+          className="ld-focus rounded-md bg-slate-200 px-3 py-1.5 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
         >
           Cancel
         </button>

@@ -34,19 +34,19 @@ export function ItemDetail(props: {
   const draft = isDraft(item);
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-3xl space-y-5">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900">
+        <div className="min-w-0">
+          <h2 className="truncate text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-50">
             {nameFromAddress(item.address)}
           </h2>
-          <p className="text-sm text-slate-600">{item.hook}</p>
+          <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">{item.hook}</p>
         </div>
         <span
-          className={`shrink-0 rounded px-2 py-0.5 text-xs font-semibold uppercase ${
+          className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${
             draft
-              ? "bg-amber-100 text-amber-800"
-              : "bg-emerald-100 text-emerald-800"
+              ? "bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
+              : "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300"
           }`}
         >
           {draft ? "draft" : "kept"}
@@ -54,7 +54,7 @@ export function ItemDetail(props: {
       </div>
 
       {item.provenance !== undefined ? (
-        <p className="text-xs text-slate-500">{item.provenance}</p>
+        <p className="text-xs text-slate-400 dark:text-slate-500">{item.provenance}</p>
       ) : null}
 
       <div className="flex gap-2">
@@ -62,7 +62,7 @@ export function ItemDetail(props: {
           <button
             type="button"
             onClick={() => props.onEdit?.(item)}
-            className="rounded bg-slate-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+            className="ld-focus rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
           >
             Edit
           </button>
@@ -71,14 +71,14 @@ export function ItemDetail(props: {
           <button
             type="button"
             onClick={() => props.onKeep?.(item)}
-            className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
+            className="ld-focus rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-700 dark:hover:bg-emerald-500"
           >
             Keep
           </button>
         ) : null}
       </div>
 
-      <div className="max-w-none text-sm leading-relaxed text-slate-800 [&_a]:text-blue-700 [&_a]:underline [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_p]:my-2 [&_table]:my-2 [&_td]:border [&_td]:border-slate-300 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-50 [&_th]:px-2 [&_th]:py-1">
+      <div className="ld-prose border-t border-slate-100 pt-5 dark:border-slate-800">
         <Markdown remarkPlugins={[remarkGfm]}>{item.body}</Markdown>
       </div>
     </div>

@@ -49,30 +49,35 @@ export function SecretDetail(props: { secret: SecretMeta }): JSX.Element {
   const fields = orderedFields(props.secret.frontmatter);
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-lg font-semibold text-slate-900">{props.secret.name}</h1>
+    <div className="mx-auto max-w-2xl space-y-5">
+      <h1 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+        {props.secret.name}
+      </h1>
 
       {fields.length > 0 ? (
-        <table className="w-full text-sm">
+        <table className="w-full border-collapse text-sm">
           <tbody>
             {fields.map((field) => (
-              <tr key={field.key} className="border-b border-slate-100">
+              <tr key={field.key} className="border-b border-slate-100 dark:border-slate-800">
                 <th
                   scope="row"
-                  className="w-40 py-1.5 pr-3 text-left align-top text-xs font-medium uppercase text-slate-500"
+                  className="w-40 py-2 pr-4 text-left align-top text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400"
                 >
                   {field.label}
                 </th>
-                <td className="py-1.5 text-slate-800">{field.value}</td>
+                <td className="py-2 text-slate-800 dark:text-slate-200">{field.value}</td>
               </tr>
             ))}
           </tbody>
         </table>
       ) : null}
 
-      <p className="rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+      <p className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm leading-relaxed text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
         The value is stored encrypted and cannot be read here. Use a full
-        device, or <code className="text-xs">loadout secret show {props.secret.name}</code>{" "}
+        device, or{" "}
+        <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          loadout secret show {props.secret.name}
+        </code>{" "}
         on the CLI.
       </p>
     </div>
