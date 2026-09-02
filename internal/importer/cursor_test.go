@@ -209,11 +209,25 @@ func TestCursorSkillsAlsoScansProjectDir(t *testing.T) {
 	}
 }
 
+// countUserRulesWarnings returns how many times Cursor's User-Rules
+// warning appears in warnings.
+func countUserRulesWarnings(warnings []importer.Warning) int {
+	n := 0
+	for _, w := range warnings {
+		if strings.Contains(w.Reason, "User Rules") && strings.Contains(w.Reason, "internal database") {
+			n++
+		}
+	}
+	return n
+}
+
 // TestCursorDefaultImportSkillsOnlyAlwaysWarnsUserRules is the DEFAULT
 // behavior test: with ProjectMemory false, RunImport for both skills
 // and memory imports the skill but NO memory fact at all (Cursor has
-// no importable global memory), and ALWAYS emits the one User-Rules
-// warning, since Cursor is present.
+// no importable global memory), and emits the User-Rules warning
+// EXACTLY ONCE, since Cursor is present. Both Skills and Memory emit
+// this warning on their own; engine.go's dedup collapses the two back
+// down to one entry — this test is the end-to-end proof of that.
 func TestCursorDefaultImportSkillsOnlyAlwaysWarnsUserRules(t *testing.T) {
 	home, vaultSkillsDir := setupCursorHome(t)
 	v := newClaudeCodeTestVault(t)
@@ -232,14 +246,56 @@ func TestCursorDefaultImportSkillsOnlyAlwaysWarnsUserRules(t *testing.T) {
 		t.Fatalf("want no memory imported by default, got %+v", facts)
 	}
 
-	var sawUserRulesWarning bool
-	for _, w := range result.Warnings {
-		if strings.Contains(w.Reason, "User Rules") && strings.Contains(w.Reason, "internal database") {
-			sawUserRulesWarning = true
-		}
+	if n := countUserRulesWarnings(result.Warnings); n != 1 {
+		t.Fatalf("want the User-Rules warning exactly once for a both-skills-and-memory import, got %d in %+v", n, result.Warnings)
 	}
-	if !sawUserRulesWarning {
-		t.Fatalf("want the User Rules warning always emitted when cursor is present, got %+v", result.Warnings)
+}
+
+// TestCursorSkillsOnlyEmitsUserRulesWarningExactlyOnce checks a
+// skills-only import (opt.Memory false): the User-Rules warning still
+// fires exactly once, since Cursor is detected.
+func TestCursorSkillsOnlyEmitsUserRulesWarningExactlyOnce(t *testing.T) {
+	home, vaultSkillsDir := setupCursorHome(t)
+	v := newClaudeCodeTestVault(t)
+	ctx := importer.ImportCtx{Home: home, VaultRoot: v.Root, VaultSkillsDir: vaultSkillsDir}
+
+	result, err := importer.RunImport(v, []importer.Source{importer.Cursor{}}, ctx, importer.Options{Skills: true, Memory: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n := countUserRulesWarnings(result.Warnings); n != 1 {
+		t.Fatalf("want the User-Rules warning exactly once for a skills-only import, got %d in %+v", n, result.Warnings)
+	}
+}
+
+// TestCursorMemoryOnlyEmitsUserRulesWarningExactlyOnce checks a
+// memory-only import (opt.Skills false, opt.Memory true, with
+// ProjectMemory true so Memory also reads real rule content): the
+// User-Rules warning still fires exactly once. This is the FINDING's
+// own repro case: before the fix, a memory-only import detected
+// Cursor but never emitted the warning at all.
+func TestCursorMemoryOnlyEmitsUserRulesWarningExactlyOnce(t *testing.T) {
+	home, vaultSkillsDir := setupCursorHome(t)
+	project := t.TempDir()
+	rulesDir := filepath.Join(project, ".cursor", "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\ndescription: a project rule\n---\n\nWrite tests first.\n"
+	if err := os.WriteFile(filepath.Join(rulesDir, "a.mdc"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v := newClaudeCodeTestVault(t)
+	ctx := importer.ImportCtx{Home: home, VaultRoot: v.Root, VaultSkillsDir: vaultSkillsDir, ProjectDir: project, ProjectMemory: true}
+
+	result, err := importer.RunImport(v, []importer.Source{importer.Cursor{}}, ctx, importer.Options{Skills: false, Memory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n := countUserRulesWarnings(result.Warnings); n != 1 {
+		t.Fatalf("want the User-Rules warning exactly once for a memory-only import, got %d in %+v", n, result.Warnings)
 	}
 }
 

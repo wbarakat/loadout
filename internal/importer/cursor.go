@@ -69,11 +69,12 @@ func (Cursor) Detect(ctx ImportCtx) (bool, string) {
 // global "User Rules" live in Cursor's internal, undocumented
 // state.vscdb database, with no stable schema or official API to read
 // them by (source map §3) — this source never opens that file, so
-// there is no way to import them. It is emitted from Skills alone,
-// the one method RunImport always calls when a caller asks for skills
-// at all — the simplest single spot that runs once per detected
-// Cursor install without needing to also emit it from Memory and risk
-// a caller that asks for both getting it twice.
+// there is no way to import them. It is emitted from BOTH Skills and
+// Memory whenever Cursor is detected, so a skills-only run, a
+// memory-only run, and a run doing both each see it. A run that does
+// both would otherwise see it twice; engine.go's RunImport collapses
+// that back down to one entry (see dedupWarnings), so this source does
+// not need to track which of its own methods already emitted it.
 func userRulesWarning() Warning {
 	return Warning{
 		Tool:   "cursor",
@@ -110,12 +111,17 @@ func (Cursor) Skills(ctx ImportCtx) ([]CandidateSkill, []Warning, error) {
 
 // Memory returns candidate facts from Cursor's project-scoped memory
 // ONLY, and only when ctx.ProjectMemory is set and ctx.ProjectDir is
-// not empty: Cursor has no importable GLOBAL memory at all (its
-// global "User Rules" are handled by userRulesWarning, not here).
-// By default (ctx.ProjectMemory false), Cursor imports no memory —
+// not empty: Cursor has no importable GLOBAL memory at all. By
+// default (ctx.ProjectMemory false), Cursor imports no memory —
 // unlike every other source in this package, there is no
 // global-instructions fallback to import instead, so there is nothing
 // to report as "skipped, pass --project-memory" either.
+//
+// It still always emits the one User-Rules warning when Cursor is
+// detected — see userRulesWarning — even on this early-return path,
+// since a caller running a memory-only import (RunImport still calls
+// Memory whenever opt.Memory is set, no matter ctx.ProjectMemory) must
+// see the warning too, not just a skills-only or a both run.
 //
 // Two native stores are read, both under ctx.ProjectDir:
 //   - .cursor/rules/*.mdc — see scanCursorRules.
@@ -124,11 +130,17 @@ func (Cursor) Skills(ctx ImportCtx) ([]CandidateSkill, []Warning, error) {
 //     name as a directory (source map §3) imports each file inside as
 //     its own fact.
 func (Cursor) Memory(ctx ImportCtx) ([]CandidateFact, []Warning, error) {
-	if !ctx.ProjectMemory || ctx.ProjectDir == "" {
-		return nil, nil, nil
+	var warnings []Warning
+	if present, _ := (Cursor{}).Detect(ctx); present {
+		warnings = append(warnings, userRulesWarning())
 	}
 
-	facts, warnings := scanCursorRules(ctx.ProjectDir)
+	if !ctx.ProjectMemory || ctx.ProjectDir == "" {
+		return nil, warnings, nil
+	}
+
+	facts, ruleWarnings := scanCursorRules(ctx.ProjectDir)
+	warnings = append(warnings, ruleWarnings...)
 
 	crFacts, crWarnings := scanCursorrulesPath(ctx.ProjectDir)
 	facts = append(facts, crFacts...)

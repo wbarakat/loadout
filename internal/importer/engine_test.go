@@ -80,6 +80,50 @@ func snapshotTree(t *testing.T, root string) map[string]string {
 	return snap
 }
 
+// TestRunImportDedupsIdenticalWarningsButKeepsDistinctOnes checks the
+// general warning-dedup pass: when Skills and Memory report the exact
+// same Warning (same Tool, Path, and Reason) — the shape Cursor's own
+// User-Rules warning takes when both methods run in one import —
+// RunImport keeps only one copy. A second, genuinely different
+// warning (a different Reason) from the same source is never touched
+// by the dedup.
+func TestRunImportDedupsIdenticalWarningsButKeepsDistinctOnes(t *testing.T) {
+	v := newEngineTestVault(t)
+	shared := importer.Warning{Tool: "faketool", Reason: "the same problem, reported twice"}
+	distinct := importer.Warning{Tool: "faketool", Reason: "a genuinely different problem"}
+	src := &fakeSource{
+		name:          "faketool",
+		present:       true,
+		skillWarnings: []importer.Warning{shared},
+		factWarnings:  []importer.Warning{shared, distinct},
+	}
+	ctx := importer.ImportCtx{Home: v.Root, VaultRoot: v.Root, VaultSkillsDir: v.SkillsDir()}
+
+	result, err := importer.RunImport(v, []importer.Source{src}, ctx, importer.Options{Skills: true, Memory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sharedCount, distinctCount int
+	for _, w := range result.Warnings {
+		switch w {
+		case shared:
+			sharedCount++
+		case distinct:
+			distinctCount++
+		}
+	}
+	if sharedCount != 1 {
+		t.Fatalf("want the identical warning collapsed to exactly 1, got %d in %+v", sharedCount, result.Warnings)
+	}
+	if distinctCount != 1 {
+		t.Fatalf("want the distinct warning kept exactly once, got %d in %+v", distinctCount, result.Warnings)
+	}
+	if len(result.Warnings) != 2 {
+		t.Fatalf("want exactly 2 total warnings after dedup, got %+v", result.Warnings)
+	}
+}
+
 func TestRunImportWritesFakeSourceCandidatesAsDraft(t *testing.T) {
 	v := newEngineTestVault(t)
 	modTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)

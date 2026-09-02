@@ -6,12 +6,40 @@ import (
 	"loadout.dev/loadout/internal/vault"
 )
 
+// dedupWarnings collapses a Warning that appears more than once — the
+// same Tool, Path, and Reason — down to a single entry, keeping the
+// first occurrence's place in order. A Source can legitimately emit
+// the identical informational warning from two of its own methods
+// (Cursor's User-Rules warning, from both Skills and Memory, is the
+// motivating case), and RunImport calls both methods in the same run
+// whenever a caller asks for both skills and memory. Without this
+// pass, that combination would show the warning twice. Two warnings
+// that differ in any one field — a different Tool, a different Path,
+// or just different wording in Reason — are genuinely distinct
+// problems and are never collapsed.
+func dedupWarnings(warnings []Warning) []Warning {
+	seen := make(map[Warning]bool, len(warnings))
+	out := make([]Warning, 0, len(warnings))
+	for _, w := range warnings {
+		if seen[w] {
+			continue
+		}
+		seen[w] = true
+		out = append(out, w)
+	}
+	return out
+}
+
 // RunImport pulls skills and memory facts from every source into the
 // vault v.
 //
 // For each source, it first calls Detect and skips a source that
 // reports itself absent. It then collects Skills and Memory
-// candidates per opt, accumulating each source's own warnings.
+// candidates per opt, accumulating each source's own warnings. Once
+// every source has run, it collapses identical warnings down to one
+// entry each — see dedupWarnings — so a Source that reports the same
+// problem from both its Skills and Memory methods is not double
+// counted just because a caller asked for both.
 //
 // It applies the shared reliability rules once, centrally, as
 // defense-in-depth even though a well-behaved Source already applies
@@ -98,6 +126,8 @@ func RunImport(v *vault.Vault, sources []Source, ctx ImportCtx, opt Options) (Im
 			}
 		}
 	}
+
+	result.Warnings = dedupWarnings(result.Warnings)
 
 	kept, deduped, err := dedupCandidates(candidates, v)
 	if err != nil {
