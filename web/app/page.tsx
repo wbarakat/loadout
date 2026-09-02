@@ -11,14 +11,20 @@
  *
  * This file also owns the write path: Edit opens `Editor` for a skill or
  * memory item; Keep (from `ItemDetail` or `ReviewQueue`) rewrites the
- * item's `review` line to `kept`. Both go through `commitEdit`
+ * item's `review` line to `kept`. Both splice the item's RAW file text —
+ * read from the last-pulled `entries` via `rawFileFor`
+ * (`../lib/dash/review.js`) — rather than reserializing the parsed
+ * `Item.frontmatter` map, so no byte inside the frontmatter block (extra
+ * spacing, a blank line, a comment-like line, key order) is ever
+ * normalized away. The spliced full file then goes through `commitEdit`
  * (`../lib/vault/sync.js`), which does its own pull-latest → apply →
- * re-encrypt → push internally — this file never builds tar entries or
- * pre-pulls before an edit. On success it re-pulls to refresh the shown
- * vault. On a `SyncConflictError` it shows a reload message and re-pulls,
- * discarding nothing silently — the user re-applies their edit against
- * the refreshed tree. On a `NotApprovedError` it routes to the
- * `NotApproved` screen, same as the initial pull.
+ * re-encrypt → push internally — this file never builds tar entries for
+ * the PUSH itself, and never pre-pulls before an edit beyond the read
+ * above. On success it re-pulls to refresh the shown vault. On a
+ * `SyncConflictError` it shows a reload message and re-pulls, discarding
+ * nothing silently — the user re-applies their edit against the
+ * refreshed tree. On a `NotApprovedError` it routes to the `NotApproved`
+ * screen, same as the initial pull.
  *
  * Edit and Keep are offered only through `ItemDetail`/`ReviewQueue`, and
  * both only ever hold a skill/memory `Item` — never a secret. `renderMain`
@@ -35,7 +41,7 @@ import { Sidebar, type Section, type SectionCounts } from "../components/Sidebar
 import { EmptyVault } from "../components/states/EmptyVault.js";
 import { NotApproved } from "../components/states/NotApproved.js";
 import { clearConfig, loadConfig, setLastVersion, type DashConfig } from "../lib/dash/config.js";
-import { serializeItem, withReviewKept } from "../lib/dash/review.js";
+import { applyRawEdit, rawFileFor, withReviewKept } from "../lib/dash/review.js";
 import { sessionFrom } from "../lib/dash/session.js";
 import { recipientFor } from "../lib/vault/age.js";
 import type { Item, Vault } from "../lib/vault/model.js";
@@ -249,15 +255,30 @@ export default function Home(): JSX.Element {
     setEditingAddress(undefined);
   }
 
+  // Both handlers below read the item's RAW file text from `pulled.entries`
+  // — the exact bytes this page last pulled — and splice it (never
+  // reserialize `Item.frontmatter`, which would normalize/drop bytes the
+  // parsed map does not keep; see `../lib/dash/review.js`). `commitEdit`
+  // re-pulls fresh internally before it pushes, so a change to the vault
+  // between this page's last pull and the push lands as a `409` — the
+  // small window where `pulled.entries` is momentarily stale is exactly
+  // what the existing conflict handling below (`SyncConflictError` →
+  // reload) already covers; it is the same edit model `commitEdit` itself
+  // documents, not a new risk this raw-read introduces.
+
   async function handleSaveEdit(item: Item, newProse: string): Promise<void> {
+    if (pulled === null) return;
     setSaving(true);
-    await commitAndRefresh(item.address, serializeItem(item, newProse));
+    const raw = rawFileFor(pulled.entries, item.address);
+    await commitAndRefresh(item.address, applyRawEdit(raw, newProse));
     setSaving(false);
     setEditingAddress(undefined);
   }
 
   async function handleKeep(item: Item): Promise<void> {
-    await commitAndRefresh(item.address, withReviewKept(item));
+    if (pulled === null) return;
+    const raw = rawFileFor(pulled.entries, item.address);
+    await commitAndRefresh(item.address, withReviewKept(raw));
   }
 
   function handleConnected(r: { vault: Vault; version: string }): void {

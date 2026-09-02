@@ -3,8 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashConfig } from "../lib/dash/config.js";
 import { withReviewKept } from "../lib/dash/review.js";
 import type { Vault } from "../lib/vault/model.js";
+import type { TarEntry } from "../lib/vault/tar.js";
 import { NotApprovedError, SyncConflictError } from "../lib/vault/sync.js";
 import Home from "./page.js";
+
+function fileEntry(name: string, text: string): TarEntry {
+  return { name, type: "file", mode: 0o644, bytes: new TextEncoder().encode(text) };
+}
 
 // Dummy test-only values — never a real key, token, or loadoutd URL.
 const CONFIG: DashConfig = {
@@ -46,6 +51,20 @@ const FIXTURE_VAULT: Vault = {
   secrets: [{ name: "stripe-key", frontmatter: { service: "stripe" } }],
   roster: [],
 };
+
+// Raw file text for each `FIXTURE_VAULT` item, as `pull` would return it in
+// `entries` — the exact bytes `rawFileFor` (`../lib/dash/review.js`) reads
+// for an Edit/Keep. `memory/beta`'s raw file carries a real frontmatter
+// block (`review: draft`) so `withReviewKept` has something to splice.
+const RAW_WIDGET_FIXER = "# Fixing widgets\n\nRun the fixer script.";
+const RAW_ALPHA = "alpha body";
+const RAW_BETA = "---\nreview: draft\n---\nbeta body";
+
+const FIXTURE_ENTRIES: TarEntry[] = [
+  fileEntry("skills/widget-fixer/SKILL.md", RAW_WIDGET_FIXER),
+  fileEntry("memory/alpha.md", RAW_ALPHA),
+  fileEntry("memory/beta.md", RAW_BETA),
+];
 
 const loadConfigMock = vi.fn<() => DashConfig | null>();
 const clearConfigMock = vi.fn();
@@ -122,7 +141,7 @@ describe("Home (dashboard shell)", () => {
   it("renders the workspace after a successful pull, with sections wired to the right items", async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
-    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
 
     render(<Home />);
 
@@ -153,7 +172,7 @@ describe("Home (dashboard shell)", () => {
   it("selecting a skill/memory row shows its ItemDetail", async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
-    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
 
     render(<Home />);
     fireEvent.click(await screen.findByText("widget-fixer"));
@@ -171,7 +190,7 @@ describe("Home (dashboard shell)", () => {
   it("selecting a secret row shows its SecretDetail, metadata only", async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
-    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
 
     render(<Home />);
     fireEvent.click(await screen.findByRole("button", { name: "Secrets" }));
@@ -225,7 +244,7 @@ describe("Home (dashboard shell)", () => {
   it("editing a memory: Save calls commitEdit with the full new file content, then re-pulls and shows the update", async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
-    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
     commitEditMock.mockResolvedValueOnce("v2");
 
     const updatedVault: Vault = {
@@ -266,9 +285,9 @@ describe("Home (dashboard shell)", () => {
   it("a SyncConflictError from commitEdit shows the reload message and re-pulls", async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
-    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
     commitEditMock.mockRejectedValueOnce(new SyncConflictError("conflict"));
-    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
 
     render(<Home />);
     fireEvent.click(await screen.findByRole("button", { name: "Memory" }));
@@ -289,14 +308,12 @@ describe("Home (dashboard shell)", () => {
     );
   });
 
-  it("Keep from ItemDetail calls commitEdit with withReviewKept(item) and re-pulls", async () => {
+  it("Keep from ItemDetail calls commitEdit with withReviewKept(rawFile) and re-pulls", async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
-    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
     commitEditMock.mockResolvedValueOnce("v2");
 
-    const betaItem = FIXTURE_VAULT.items.find((i) => i.address === "memory/beta");
-    if (betaItem === undefined) throw new Error("fixture missing memory/beta");
     const keptVault: Vault = {
       ...FIXTURE_VAULT,
       items: FIXTURE_VAULT.items.map((item) =>
@@ -313,10 +330,13 @@ describe("Home (dashboard shell)", () => {
     fireEvent.click(await screen.findByRole("button", { name: /keep/i }));
 
     await waitFor(() => expect(commitEditMock).toHaveBeenCalledTimes(1));
+    // Computed via the real, non-mocked `withReviewKept`, spliced from the
+    // exact raw bytes `pull` returned in `entries` — not a hand-written
+    // string, and not reserialized from the parsed `Item.frontmatter` map.
     expect(commitEditMock).toHaveBeenCalledWith(
       expect.anything(),
       "memory/beta",
-      withReviewKept(betaItem),
+      withReviewKept(RAW_BETA),
     );
     await waitFor(() => expect(pullMock).toHaveBeenCalledTimes(2));
   });
@@ -324,7 +344,7 @@ describe("Home (dashboard shell)", () => {
   it("Keep from ReviewQueue calls commitEdit and the kept item leaves the queue", async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
-    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
     commitEditMock.mockResolvedValueOnce("v2");
 
     const keptVault: Vault = {
@@ -351,7 +371,7 @@ describe("Home (dashboard shell)", () => {
   it("offers no Edit or Keep control for a secret, and never calls commitEdit for one", async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
-    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
 
     render(<Home />);
     fireEvent.click(await screen.findByRole("button", { name: "Secrets" }));

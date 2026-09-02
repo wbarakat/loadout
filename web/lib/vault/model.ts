@@ -208,7 +208,17 @@ export function outerRecipients(roster: RosterDevice[]): string[] {
   return [...roster].sort(byName).map((device) => device.recipient);
 }
 
-function targetFileName(address: string): string {
+/**
+ * Maps a skill/memory address to the exact tar entry name that holds it.
+ * Exported so callers that need the RAW on-disk bytes for an address (the
+ * dashboard's edit/keep path — `../dash/review.ts` — needs the file
+ * verbatim, not the parsed `Item`) can find the same entry `applyEdit`
+ * itself edits, without duplicating this mapping.
+ *
+ * @throws if `address` names a secret — secrets are never edited or
+ * read raw from the browser.
+ */
+export function targetFileName(address: string): string {
   if (address.startsWith("secret/") || address.startsWith("secrets/")) {
     throw new Error(
       `cannot edit "${address}": secrets are never edited from the browser`,
