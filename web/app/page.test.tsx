@@ -1,8 +1,9 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashConfig } from "../lib/dash/config.js";
+import { withReviewKept } from "../lib/dash/review.js";
 import type { Vault } from "../lib/vault/model.js";
-import { NotApprovedError } from "../lib/vault/sync.js";
+import { NotApprovedError, SyncConflictError } from "../lib/vault/sync.js";
 import Home from "./page.js";
 
 // Dummy test-only values — never a real key, token, or loadoutd URL.
@@ -48,10 +49,12 @@ const FIXTURE_VAULT: Vault = {
 
 const loadConfigMock = vi.fn<() => DashConfig | null>();
 const clearConfigMock = vi.fn();
+const setLastVersionMock = vi.fn();
 vi.mock("../lib/dash/config.js", () => ({
   loadConfig: () => loadConfigMock(),
   clearConfig: () => clearConfigMock(),
   saveConfig: vi.fn(),
+  setLastVersion: (v: string) => setLastVersionMock(v),
 }));
 
 const sessionFromMock = vi.fn();
@@ -67,6 +70,7 @@ vi.mock("../lib/dash/session.js", async () => {
 });
 
 const pullMock = vi.fn();
+const commitEditMock = vi.fn();
 vi.mock("../lib/vault/sync.js", async () => {
   const actual =
     await vi.importActual<typeof import("../lib/vault/sync.js")>(
@@ -75,6 +79,8 @@ vi.mock("../lib/vault/sync.js", async () => {
   return {
     ...actual,
     pull: (session: unknown) => pullMock(session),
+    commitEdit: (session: unknown, address: string, newBody: string) =>
+      commitEditMock(session, address, newBody),
   };
 });
 
@@ -94,8 +100,10 @@ describe("Home (dashboard shell)", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
     clearConfigMock.mockReset();
+    setLastVersionMock.mockReset();
     sessionFromMock.mockReset();
     pullMock.mockReset();
+    commitEditMock.mockReset();
     recipientForMock.mockReset();
   });
 
@@ -212,5 +220,148 @@ describe("Home (dashboard shell)", () => {
     const reconnectButton = screen.getByRole("button", { name: /reconnect.*settings/i });
     fireEvent.click(reconnectButton);
     expect(clearConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("editing a memory: Save calls commitEdit with the full new file content, then re-pulls and shows the update", async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    commitEditMock.mockResolvedValueOnce("v2");
+
+    const updatedVault: Vault = {
+      ...FIXTURE_VAULT,
+      items: FIXTURE_VAULT.items.map((item) =>
+        item.address === "memory/alpha" ? { ...item, body: "alpha body v2" } : item,
+      ),
+    };
+    pullMock.mockResolvedValueOnce({ vault: updatedVault, entries: [], version: "v2" });
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: "Memory" }));
+    fireEvent.click(await screen.findByText("alpha"));
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+
+    const textarea = await screen.findByRole("textbox");
+    expect(textarea).toHaveValue("alpha body");
+    fireEvent.change(textarea, { target: { value: "alpha body v2" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(commitEditMock).toHaveBeenCalledTimes(1));
+    // memory/alpha has no frontmatter, so the full file content is just the
+    // edited prose, unchanged.
+    expect(commitEditMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "memory/alpha",
+      "alpha body v2",
+    );
+
+    await waitFor(() => expect(pullMock).toHaveBeenCalledTimes(2));
+    expect(setLastVersionMock).toHaveBeenCalledWith("v2");
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText("alpha body v2")).toBeInTheDocument();
+  });
+
+  it("a SyncConflictError from commitEdit shows the reload message and re-pulls", async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    commitEditMock.mockRejectedValueOnce(new SyncConflictError("conflict"));
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: "Memory" }));
+    fireEvent.click(await screen.findByText("alpha"));
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+
+    const textarea = await screen.findByRole("textbox");
+    fireEvent.change(textarea, { target: { value: "a local edit, about to conflict" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(
+      await screen.findByText(/the vault changed on another device\. reloading the latest\./i),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(pullMock).toHaveBeenCalledTimes(2));
+    // The editor closes; no data is silently applied on top of stale state.
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("Keep from ItemDetail calls commitEdit with withReviewKept(item) and re-pulls", async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    commitEditMock.mockResolvedValueOnce("v2");
+
+    const betaItem = FIXTURE_VAULT.items.find((i) => i.address === "memory/beta");
+    if (betaItem === undefined) throw new Error("fixture missing memory/beta");
+    const keptVault: Vault = {
+      ...FIXTURE_VAULT,
+      items: FIXTURE_VAULT.items.map((item) =>
+        item.address === "memory/beta"
+          ? { ...item, review: "kept", frontmatter: { review: "kept" } }
+          : item,
+      ),
+    };
+    pullMock.mockResolvedValueOnce({ vault: keptVault, entries: [], version: "v2" });
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: "Memory" }));
+    fireEvent.click(await screen.findByText("beta"));
+    fireEvent.click(await screen.findByRole("button", { name: /keep/i }));
+
+    await waitFor(() => expect(commitEditMock).toHaveBeenCalledTimes(1));
+    expect(commitEditMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "memory/beta",
+      withReviewKept(betaItem),
+    );
+    await waitFor(() => expect(pullMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("Keep from ReviewQueue calls commitEdit and the kept item leaves the queue", async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+    commitEditMock.mockResolvedValueOnce("v2");
+
+    const keptVault: Vault = {
+      ...FIXTURE_VAULT,
+      items: FIXTURE_VAULT.items.map((item) =>
+        item.address === "memory/beta"
+          ? { ...item, review: "kept", frontmatter: { review: "kept" } }
+          : item,
+      ),
+    };
+    pullMock.mockResolvedValueOnce({ vault: keptVault, entries: [], version: "v2" });
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+    expect(await screen.findByText("beta")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /keep/i }));
+
+    await waitFor(() => expect(commitEditMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(pullMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText("beta")).not.toBeInTheDocument());
+  });
+
+  it("offers no Edit or Keep control for a secret, and never calls commitEdit for one", async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: "Secrets" }));
+    fireEvent.click(await screen.findByText("stripe-key"));
+
+    await waitFor(() =>
+      expect(screen.getByText(/cannot be read here/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("button", { name: /edit/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /keep/i })).not.toBeInTheDocument();
+    expect(commitEditMock).not.toHaveBeenCalled();
   });
 });
