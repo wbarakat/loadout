@@ -1,0 +1,7 @@
+memory:
+  memory_char_limit: 4000
+  write_approval: false
+skills:
+  config:
+    example: true
+secret_token: SENTINEL-CONFIG-TOKEN-MUST-NOT-BE-READ
