@@ -9,7 +9,14 @@ import (
 const usage = `usage: loadout <command>
 
 commands:
-  init                       create the vault
+  init                       first-run wizard: detect installed agent tools,
+                             create the vault (or keep an existing one),
+                             enable+configure their adapters, offer to
+                             import their skills/memory as drafts, and
+                             optionally connect a loadoutd remote.
+                             Prompts over stdin; every prompt has a
+                             default, so it is also safe to run
+                             unattended with empty stdin.
   add skill NAME [--by WHO]  add a skill
   add memory NAME [--by WHO] add a memory fact
   show KIND/NAME             print an item's file
