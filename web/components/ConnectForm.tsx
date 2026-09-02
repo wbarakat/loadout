@@ -9,8 +9,7 @@ import {
   sessionFrom,
 } from "../lib/dash/session.js";
 import { recipientFor } from "../lib/vault/age.js";
-import type { Vault } from "../lib/vault/model.js";
-import { NotApprovedError, pull } from "../lib/vault/sync.js";
+import { NotApprovedError, pull, type PulledVault } from "../lib/vault/sync.js";
 import { CopyButton } from "./CopyButton.js";
 import { NotApproved } from "./states/NotApproved.js";
 
@@ -65,7 +64,7 @@ function effectiveDeviceName(deviceName: string): string {
  */
 export function ConnectForm(props: {
   initial?: DashConfig;
-  onConnected: (r: { vault: Vault; version: string }) => void;
+  onConnected: (r: PulledVault) => void;
 }): JSX.Element {
   const [baseUrl, setBaseUrl] = useState(props.initial?.baseUrl ?? "");
   const [token, setToken] = useState(props.initial?.token ?? "");
@@ -149,13 +148,19 @@ export function ConnectForm(props: {
   }
 
   /** Pulls the vault with the given config, and routes to the right state:
-   * connected, not-approved, or a network error on the form. */
+   * connected, not-approved, or a network error on the form. Forwards the
+   * FULL `PulledVault` (vault, entries, version) to `onConnected` — not
+   * just `{vault, version}` — so the page's `entries` state is populated
+   * immediately on connect. Without the raw `entries`, an Edit or Keep
+   * attempted in this same session (before any later re-pull) would fail:
+   * the write path reads an item's raw file bytes from `entries`, and an
+   * empty array has nothing to find. */
   async function attemptPull(cfg: DashConfig): Promise<void> {
     try {
       const pulled = await pull(sessionFrom(cfg));
       setNotApproved(false);
       setConnectError(null);
-      props.onConnected({ vault: pulled.vault, version: pulled.version });
+      props.onConnected(pulled);
     } catch (err) {
       if (err instanceof NotApprovedError) {
         setNotApproved(true);

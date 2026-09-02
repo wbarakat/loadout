@@ -11,6 +11,30 @@ function fileEntry(name: string, text: string): TarEntry {
   return { name, type: "file", mode: 0o644, bytes: new TextEncoder().encode(text) };
 }
 
+// A minimal stand-in for the real `ConnectForm`: it renders the same
+// heading text the "no saved config" test asserts on, plus a button that
+// fires `onConnected` with whatever a test put in `connectStubRef` — this
+// lets a test simulate "connect just completed" without driving the real
+// form's key-generation/registration/network flow (that flow is already
+// covered end-to-end by ConnectForm.test.tsx). Declared via `vi.hoisted`
+// so the ref exists before this hoisted `vi.mock` factory runs.
+const connectStubRef = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock("../components/ConnectForm.js", () => ({
+  ConnectForm: (props: { onConnected: (r: unknown) => void }) => (
+    <div>
+      <h1>Connect to loadoutd</h1>
+      <button
+        type="button"
+        onClick={() => {
+          if (connectStubRef.current !== null) props.onConnected(connectStubRef.current);
+        }}
+      >
+        Stub connect
+      </button>
+    </div>
+  ),
+}));
+
 // Dummy test-only values — never a real key, token, or loadoutd URL.
 const CONFIG: DashConfig = {
   baseUrl: "http://loadoutd.example.test:7777",
@@ -124,6 +148,7 @@ describe("Home (dashboard shell)", () => {
     pullMock.mockReset();
     commitEditMock.mockReset();
     recipientForMock.mockReset();
+    connectStubRef.current = null;
   });
 
   afterEach(() => {
@@ -282,7 +307,7 @@ describe("Home (dashboard shell)", () => {
     expect(await screen.findByText("alpha body v2")).toBeInTheDocument();
   });
 
-  it("a SyncConflictError from commitEdit shows the reload message and re-pulls", async () => {
+  it("a SyncConflictError from commitEdit keeps the editor open with the typed prose, and re-pulls", async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
     pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
@@ -302,10 +327,35 @@ describe("Home (dashboard shell)", () => {
       await screen.findByText(/the vault changed on another device\. reloading the latest\./i),
     ).toBeInTheDocument();
     await waitFor(() => expect(pullMock).toHaveBeenCalledTimes(2));
-    // The editor closes; no data is silently applied on top of stale state.
-    await waitFor(() =>
-      expect(screen.queryByRole("textbox")).not.toBeInTheDocument(),
-    );
+
+    // Minor (a): the editor stays OPEN and the user's typed prose is
+    // untouched — nothing is discarded on a conflict. The user re-saves
+    // on top of the freshly re-pulled state at their own choice.
+    const textareaAfter = await screen.findByRole("textbox");
+    expect(textareaAfter).toHaveValue("a local edit, about to conflict");
+  });
+
+  it("a re-pull failure after a successful commit does not leave the editor stuck on Saving", async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" });
+    commitEditMock.mockResolvedValueOnce("v2");
+    pullMock.mockRejectedValueOnce(new Error("network dropped mid re-pull"));
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: "Memory" }));
+    fireEvent.click(await screen.findByText("alpha"));
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+
+    const textarea = await screen.findByRole("textbox");
+    fireEvent.change(textarea, { target: { value: "alpha body v2" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    // Minor (b): the double fault (push succeeded, the follow-up re-pull
+    // failed) surfaces as the generic error panel — never a stuck
+    // "Saving" with no way forward.
+    expect(await screen.findByText(/something went wrong/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^saving$/i })).not.toBeInTheDocument();
   });
 
   it("Keep from ItemDetail calls commitEdit with withReviewKept(rawFile) and re-pulls", async () => {
@@ -383,5 +433,72 @@ describe("Home (dashboard shell)", () => {
     expect(screen.queryByRole("button", { name: /edit/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /keep/i })).not.toBeInTheDocument();
     expect(commitEditMock).not.toHaveBeenCalled();
+  });
+
+  it("connecting, then immediately editing an item, works: entries are forwarded from connect", async () => {
+    // The first `loadConfig()` call (on mount) finds nothing saved yet;
+    // the second (inside `handleConnected`, right after the stub
+    // "connects") finds the config the real flow would have just saved.
+    loadConfigMock.mockReturnValueOnce(null).mockReturnValue(CONFIG);
+    sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
+    commitEditMock.mockResolvedValueOnce("v2");
+    pullMock.mockResolvedValueOnce({
+      vault: {
+        ...FIXTURE_VAULT,
+        items: FIXTURE_VAULT.items.map((item) =>
+          item.address === "memory/alpha" ? { ...item, body: "alpha body v2" } : item,
+        ),
+      },
+      entries: [],
+      version: "v2",
+    });
+    // The stubbed ConnectForm hands the page the FULL pulled result —
+    // vault, entries, AND version — exactly like the fixed `attemptPull`
+    // does for real.
+    connectStubRef.current = { vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" };
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: /stub connect/i }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Memory" }));
+    fireEvent.click(await screen.findByText("alpha"));
+    fireEvent.click(await screen.findByRole("button", { name: /edit/i }));
+
+    const textarea = await screen.findByRole("textbox");
+    expect(textarea).toHaveValue("alpha body");
+    fireEvent.change(textarea, { target: { value: "alpha body v2" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    // No "no such item in the pulled vault entries" throw: `rawFileFor`
+    // found the raw file because `entries` was populated on connect, so
+    // `commitEdit` actually ran.
+    await waitFor(() => expect(commitEditMock).toHaveBeenCalledTimes(1));
+    expect(commitEditMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "memory/alpha",
+      "alpha body v2",
+    );
+  });
+
+  it("connecting, then immediately keeping a draft, works: entries are forwarded from connect", async () => {
+    loadConfigMock.mockReturnValueOnce(null).mockReturnValue(CONFIG);
+    sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
+    commitEditMock.mockResolvedValueOnce("v2");
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v2" });
+    connectStubRef.current = { vault: FIXTURE_VAULT, entries: FIXTURE_ENTRIES, version: "v1" };
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: /stub connect/i }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Memory" }));
+    fireEvent.click(await screen.findByText("beta"));
+    fireEvent.click(await screen.findByRole("button", { name: /keep/i }));
+
+    await waitFor(() => expect(commitEditMock).toHaveBeenCalledTimes(1));
+    expect(commitEditMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "memory/beta",
+      withReviewKept(RAW_BETA),
+    );
   });
 });

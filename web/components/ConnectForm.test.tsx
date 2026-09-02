@@ -135,7 +135,10 @@ describe("ConnectForm", () => {
     fireEvent.click(screen.getByRole("button", { name: /register \+ connect/i }));
 
     await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
-    expect(onConnected).toHaveBeenCalledWith({ vault: EMPTY_VAULT, version: "v1" });
+    // The FULL pulled result — vault, entries, AND version — is forwarded,
+    // not just {vault, version}: the page needs `entries` to make an Edit
+    // or Keep work in this same session (see page.tsx's `handleConnected`).
+    expect(onConnected).toHaveBeenCalledWith({ vault: EMPTY_VAULT, entries: [], version: "v1" });
 
     expect(registerForApprovalMock).toHaveBeenCalledWith(
       expect.objectContaining({

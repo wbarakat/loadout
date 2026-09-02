@@ -64,6 +64,14 @@ type Phase =
 
 const EMPTY_VAULT: Vault = { items: [], secrets: [], roster: [] };
 
+/** What `commitAndRefresh` settled on, so its caller can decide what the
+ * UI does next (in particular, whether an open `Editor` should close).
+ * `"failed"` covers both a `NotApprovedError`/generic error on the push
+ * itself AND a re-pull that failed after either a successful push or a
+ * conflict — either way `handlePullFailure` has already switched `phase`
+ * away from `"ready"`, so the caller has nothing left to do. */
+type CommitOutcome = "success" | "conflict" | "failed";
+
 /** Shown after a `SyncConflictError`: no edit is lost silently — the user
  * sees the latest tree and re-applies their change. */
 const CONFLICT_MESSAGE =
@@ -184,24 +192,34 @@ export default function Home(): JSX.Element {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | undefined>(undefined);
 
+  /** Routes any pull failure to the right phase: not-approved (deriving
+   * the recipient to show), or the generic error panel. Shared by the
+   * initial pull and every re-pull that runs after a commit or a
+   * conflict — a re-pull failing must never leave the UI silently stuck
+   * (for example a permanent "Saving"), so each re-pull site below
+   * funnels its failure through this same routing. */
+  async function handlePullFailure(err: unknown, cfg: DashConfig): Promise<void> {
+    if (err instanceof NotApprovedError) {
+      try {
+        const recipient = await recipientFor(cfg.identity);
+        setPhase({ kind: "not-approved", recipient, deviceName: cfg.deviceName });
+      } catch (recipientErr) {
+        setPhase({ kind: "error", message: describeError(recipientErr) });
+      }
+    } else {
+      setPhase({ kind: "error", message: describeError(err) });
+    }
+  }
+
   /** Pulls with `cfg`, and routes to the right phase: ready, empty,
-   * not-approved (deriving the recipient to show), or a generic error. */
+   * not-approved, or a generic error. */
   async function attemptPull(cfg: DashConfig): Promise<void> {
     try {
       const result = await pull(sessionFrom(cfg));
       setPulled(result);
       setPhase(result.version === "" ? { kind: "empty" } : { kind: "ready" });
     } catch (err) {
-      if (err instanceof NotApprovedError) {
-        try {
-          const recipient = await recipientFor(cfg.identity);
-          setPhase({ kind: "not-approved", recipient, deviceName: cfg.deviceName });
-        } catch (recipientErr) {
-          setPhase({ kind: "error", message: describeError(recipientErr) });
-        }
-      } else {
-        setPhase({ kind: "error", message: describeError(err) });
-      }
+      await handlePullFailure(err, cfg);
     }
   }
 
@@ -229,31 +247,40 @@ export default function Home(): JSX.Element {
    * - success: records the new version, re-pulls to show it.
    * - `SyncConflictError`: shows the reload message, re-pulls — no local
    *   edit is applied on top of stale state, so nothing is silently lost.
+   *   The CALLER decides what happens to any in-progress UI (Minor (a):
+   *   an open `Editor` must stay open, with the user's typed prose
+   *   intact, not be closed out from under them).
    * - `NotApprovedError`: routes to the `NotApproved` screen.
-   * - anything else: the generic error panel.
+   * - anything else, INCLUDING a re-pull that itself fails (Minor (b)):
+   *   the generic error panel. A re-pull failure is never left
+   *   unhandled — that would strand a caller's "saving" flag forever.
    */
-  async function commitAndRefresh(address: string, newBody: string): Promise<void> {
-    if (config === null) return;
+  async function commitAndRefresh(address: string, newBody: string): Promise<CommitOutcome> {
+    if (config === null) return "failed";
+    const cfg = config;
     try {
-      const newVersion = await commitEdit(sessionFrom(config), address, newBody);
+      const newVersion = await commitEdit(sessionFrom(cfg), address, newBody);
       setLastVersion(newVersion);
-      await refreshPull(config);
+      try {
+        await refreshPull(cfg);
+        return "success";
+      } catch (refreshErr) {
+        await handlePullFailure(refreshErr, cfg);
+        return "failed";
+      }
     } catch (err) {
       if (err instanceof SyncConflictError) {
         setToast(CONFLICT_MESSAGE);
-        await refreshPull(config);
-        return;
-      }
-      if (err instanceof NotApprovedError) {
         try {
-          const recipient = await recipientFor(config.identity);
-          setPhase({ kind: "not-approved", recipient, deviceName: config.deviceName });
-        } catch (recipientErr) {
-          setPhase({ kind: "error", message: describeError(recipientErr) });
+          await refreshPull(cfg);
+        } catch (refreshErr) {
+          await handlePullFailure(refreshErr, cfg);
+          return "failed";
         }
-        return;
+        return "conflict";
       }
-      setPhase({ kind: "error", message: describeError(err) });
+      await handlePullFailure(err, cfg);
+      return "failed";
     }
   }
 
@@ -280,10 +307,25 @@ export default function Home(): JSX.Element {
   async function handleSaveEdit(item: Item, newProse: string): Promise<void> {
     if (pulled === null) return;
     setSaving(true);
-    const raw = rawFileFor(pulled.entries, item.address);
-    await commitAndRefresh(item.address, applyRawEdit(raw, newProse));
-    setSaving(false);
-    setEditingAddress(undefined);
+    try {
+      const raw = rawFileFor(pulled.entries, item.address);
+      const outcome = await commitAndRefresh(item.address, applyRawEdit(raw, newProse));
+      // Minor (a): on a conflict, the Editor stays open and the user's
+      // typed prose is untouched — it lives in the Editor's own state,
+      // which this component never resets, since the Editor component
+      // itself never unmounts here (only its `item` prop's content may
+      // change after the re-pull above). Only a genuine success closes
+      // it; "failed" already moved `phase` away from "ready", so the
+      // Editor is gone regardless of what this does.
+      if (outcome === "success") {
+        setEditingAddress(undefined);
+      }
+    } finally {
+      // Minor (b): whatever happened above — success, conflict, or a
+      // double fault where the re-pull itself failed — "Saving" must
+      // never stick.
+      setSaving(false);
+    }
   }
 
   async function handleKeep(item: Item): Promise<void> {
@@ -292,9 +334,15 @@ export default function Home(): JSX.Element {
     await commitAndRefresh(item.address, withReviewKept(raw));
   }
 
-  function handleConnected(r: { vault: Vault; version: string }): void {
+  /** `r` is the FULL `PulledVault` `ConnectForm` just pulled — vault,
+   * entries, AND version. Storing it as-is (not just `{vault, version}`)
+   * means `pulled.entries` is populated immediately on connect, so an
+   * Edit or Keep attempted in this same session — before any later
+   * re-pull — has the raw file bytes `rawFileFor` needs, instead of
+   * throwing "no such item in the pulled vault entries". */
+  function handleConnected(r: PulledVault): void {
     setConfig(loadConfig());
-    setPulled({ vault: r.vault, entries: [], version: r.version });
+    setPulled(r);
     setSection("skills");
     setSelectedAddress(undefined);
     setPhase(r.version === "" ? { kind: "empty" } : { kind: "ready" });
