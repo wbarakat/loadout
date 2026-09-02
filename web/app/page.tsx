@@ -5,8 +5,10 @@
  *
  * On mount, this loads the saved connection config. With none saved, it
  * renders `ConnectForm`. With one saved, it pulls the vault and renders the
- * workspace: `Sidebar` + `ItemList` + a detail placeholder (Task 5 replaces
- * the placeholder with `ItemDetail`/`SecretDetail`; Task 6 adds editing).
+ * workspace: `Sidebar` + `ItemList` + a detail pane. A selected skill or
+ * memory shows `ItemDetail`; a selected secret shows `SecretDetail`
+ * (metadata only — a secret value never reaches this pane). Edit and Keep
+ * have no handler yet; Task 6 wires them.
  *
  * The pulled `{vault, entries, version}` stays in state as-is — `entries`
  * feeds `commitEdit` in Task 6, so this file never drops it, even though
@@ -14,7 +16,9 @@
  */
 import { useEffect, useState, type JSX } from "react";
 import { ConnectForm } from "../components/ConnectForm.js";
+import { ItemDetail } from "../components/ItemDetail.js";
 import { ItemList, type ListRow } from "../components/ItemList.js";
+import { SecretDetail } from "../components/SecretDetail.js";
 import { Sidebar, type Section, type SectionCounts } from "../components/Sidebar.js";
 import { EmptyVault } from "../components/states/EmptyVault.js";
 import { NotApproved } from "../components/states/NotApproved.js";
@@ -88,6 +92,30 @@ function rowsFor(section: Section, vault: Vault): ListRow[] {
     case "settings":
       return [];
   }
+}
+
+/** Renders the detail pane for the selected address: `ItemDetail` for a
+ * skill/memory, `SecretDetail` (metadata only, no value) for a secret. Edit
+ * and Keep have no handler yet — Task 6 wires them. */
+function renderDetail(vault: Vault, selectedAddress: string | undefined): JSX.Element {
+  if (selectedAddress === undefined) {
+    return <p className="text-sm text-slate-400">Select an item to view it.</p>;
+  }
+
+  if (selectedAddress.startsWith("secret/")) {
+    const name = selectedAddress.slice("secret/".length);
+    const secret = vault.secrets.find((s) => s.name === name);
+    if (secret === undefined) {
+      return <p className="text-sm text-slate-400">Select an item to view it.</p>;
+    }
+    return <SecretDetail secret={secret} />;
+  }
+
+  const item = vault.items.find((i) => i.address === selectedAddress);
+  if (item === undefined) {
+    return <p className="text-sm text-slate-400">Select an item to view it.</p>;
+  }
+  return <ItemDetail item={item} />;
 }
 
 function countsFor(vault: Vault): SectionCounts {
@@ -238,14 +266,8 @@ export default function Home(): JSX.Element {
               onSelect={setSelectedAddress}
             />
           </div>
-          <div className="flex-1 p-6">
-            {selectedAddress !== undefined ? (
-              // Placeholder only — Task 5 renders the real ItemDetail /
-              // SecretDetail here. A secret has no value to show even then.
-              <p className="text-sm text-slate-600">Selected: {selectedAddress}</p>
-            ) : (
-              <p className="text-sm text-slate-400">Select an item to view it.</p>
-            )}
+          <div className="flex-1 overflow-y-auto p-6">
+            {renderDetail(vault, selectedAddress)}
           </div>
         </>
       )}

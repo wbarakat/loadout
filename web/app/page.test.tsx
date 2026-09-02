@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashConfig } from "../lib/dash/config.js";
 import type { Vault } from "../lib/vault/model.js";
@@ -23,7 +23,7 @@ const FIXTURE_VAULT: Vault = {
       address: "skill/widget-fixer",
       kind: "skill",
       hook: "Fixes widgets",
-      body: "# widget-fixer",
+      body: "# Fixing widgets\n\nRun the fixer script.",
       frontmatter: {},
     },
     {
@@ -142,7 +142,7 @@ describe("Home (dashboard shell)", () => {
     expect(document.body.textContent ?? "").not.toMatch(/value/i);
   });
 
-  it("selecting a row shows it in the detail placeholder", async () => {
+  it("selecting a skill/memory row shows its ItemDetail", async () => {
     loadConfigMock.mockReturnValue(CONFIG);
     sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
     pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
@@ -150,9 +150,29 @@ describe("Home (dashboard shell)", () => {
     render(<Home />);
     fireEvent.click(await screen.findByText("widget-fixer"));
 
+    // ItemDetail renders the body as Markdown: "# Fixing widgets" becomes
+    // a heading.
     await waitFor(() =>
-      expect(screen.getByText(/skill\/widget-fixer/)).toBeInTheDocument(),
+      expect(
+        screen.getByRole("heading", { name: "Fixing widgets" }),
+      ).toBeInTheDocument(),
     );
+    expect(screen.getByText(/kept/i)).toBeInTheDocument();
+  });
+
+  it("selecting a secret row shows its SecretDetail, metadata only", async () => {
+    loadConfigMock.mockReturnValue(CONFIG);
+    sessionFromMock.mockReturnValue({ client: {}, identity: CONFIG.identity });
+    pullMock.mockResolvedValueOnce({ vault: FIXTURE_VAULT, entries: [], version: "v1" });
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole("button", { name: "Secrets" }));
+    fireEvent.click(await screen.findByText("stripe-key"));
+
+    await waitFor(() =>
+      expect(screen.getByText(/cannot be read here/i)).toBeInTheDocument(),
+    );
+    expect(within(screen.getByRole("table")).getByText("stripe")).toBeInTheDocument();
   });
 
   it("renders NotApproved when pull throws NotApprovedError", async () => {
