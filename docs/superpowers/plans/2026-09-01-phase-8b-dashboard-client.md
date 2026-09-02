@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go stdlib (loadoutd CORS). TypeScript + Vitest for the library; `age-encryption` (Filippo Valsorda's TS age implementation) for X25519 crypto; `smol-toml` for `devices.toml`; a hand-rolled minimal ustar reader/writer (no general tar dependency, so traversal-hardening is under our control). Node 20+, npm.
 
-**Spec:** `/Users/waleed/loadout/PLAN.md` — §11 (security model, v1 trust boundary), §12 Phase 8b, invariant 10 (a no-secrets device never decrypts a secret). **Interop contract (authoritative wire/format reference for every task):** the implementer receives the file `phase-8b-interop-contract.md` (byte-level detail on the HTTP API, the age blob, the tar layout, `value.age`, the roster, the push protocol, enrollment, age specifics, and CORS). Read it first; it pins every format this library must match.
+**Spec:** `~/loadout/PLAN.md` — §11 (security model, v1 trust boundary), §12 Phase 8b, invariant 10 (a no-secrets device never decrypts a secret). **Interop contract (authoritative wire/format reference for every task):** the implementer receives the file `phase-8b-interop-contract.md` (byte-level detail on the HTTP API, the age blob, the tar layout, `value.age`, the roster, the push protocol, enrollment, age specifics, and CORS). Read it first; it pins every format this library must match.
 
 ## Global Constraints
 

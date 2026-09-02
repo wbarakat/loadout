@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go stdlib + the existing `github.com/BurntSushi/toml`. No new dependencies.
 
-**Spec:** `/Users/waleed/loadout/PLAN.md` v3 — sections 4 (items), 5 (principles), 6 (tower), 7 (interface contract), 8 (invariants), 12 (Phase 2).
+**Spec:** `~/loadout/PLAN.md` v3 — sections 4 (items), 5 (principles), 6 (tower), 7 (interface contract), 8 (invariants), 12 (Phase 2).
 
 ## Global Constraints
 

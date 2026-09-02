@@ -4,11 +4,11 @@
 
 **Goal:** Build the Linear-grade browser dashboard on top of the proven Part 1 vault-client library: connect to a self-hosted `loadoutd` as a no-secrets device, browse skills/memory, view secret metadata + provenance/review, edit and keep (review) items, and deploy the app to the owner's Vercel.
 
-**Architecture:** A Next.js App-Router app in `web/`, exported as a fully static site (`output: "export"`) — there is NO server component to the data path. Every byte of vault I/O and crypto runs in the browser via the Part 1 library (`web/lib/vault/`): the page holds the no-secrets age identity, calls `loadoutd` directly, decrypts and renders in the browser. Vercel only serves static assets. Secret values never decrypt in the browser (Phase 8a + Part 1 guarantee); secrets show as metadata only. State (loadoutd URL, bearer token, device identity, last-known version) lives in the viewer's browser storage. Styling is Tailwind; item bodies render as Markdown. Deploy targets `wbarakats-projects` (team `team_AjWVoDTXi5CVou2h8brPl3KL`).
+**Architecture:** A Next.js App-Router app in `web/`, exported as a fully static site (`output: "export"`) — there is NO server component to the data path. Every byte of vault I/O and crypto runs in the browser via the Part 1 library (`web/lib/vault/`): the page holds the no-secrets age identity, calls `loadoutd` directly, decrypts and renders in the browser. Vercel only serves static assets. Secret values never decrypt in the browser (Phase 8a + Part 1 guarantee); secrets show as metadata only. State (loadoutd URL, bearer token, device identity, last-known version) lives in the viewer's browser storage. Styling is Tailwind; item bodies render as Markdown. Deploy targets the owner's Vercel team.
 
 **Tech Stack:** Next.js (App Router, static export) + React + TypeScript; Tailwind CSS; `react-markdown` + `remark-gfm` for item bodies; the Part 1 library (`age-encryption`, `smol-toml`). Tests: Vitest + `@testing-library/react` + `@vitejs/plugin-react` in a jsdom/happy-dom environment (the existing lib tests keep their node environment).
 
-**Spec:** `/Users/waleed/loadout/PLAN.md` — §5 (agent-is-the-user; the same clarity serves a human), §10 (provenance = the knowledge audit trail), §12 Phase 8b. **Part 1 library (the app's only data layer)** — its exports are the interface every task builds on:
+**Spec:** `~/loadout/PLAN.md` — §5 (agent-is-the-user; the same clarity serves a human), §10 (provenance = the knowledge audit trail), §12 Phase 8b. **Part 1 library (the app's only data layer)** — its exports are the interface every task builds on:
 - `web/lib/vault/sync.ts`: `pull(session) → {vault, entries, version}`, `commitEdit(session, address, newBody) → version`, `Session {client, identity}`, `NotApprovedError`, `SyncConflictError`.
 - `web/lib/vault/client.ts`: `LoadoutdClient({baseUrl, token})`, `registerDevice(name, recipient)`, `ConflictError`.
 - `web/lib/vault/age.ts`: `generateKeypair() → {identity, recipient}`, `recipientFor(identity)`.
@@ -210,7 +210,7 @@ export function NotApproved(props: { recipient: string; deviceName: string; onRe
 
 Sequence (controller):
 - Confirm `npm --prefix web run build` produces a clean static export.
-- Deploy `web/` to `wbarakats-projects` (team `team_AjWVoDTXi5CVou2h8brPl3KL`) as project `loadout` via the Vercel MCP; capture the production URL.
+- Deploy `web/` to the owner's Vercel team as project `loadout` via the Vercel MCP; capture the production URL.
 - Tell the user the deployment URL so they start `loadoutd` with `-cors-origin=<that URL>` (and a portless HTTPS front), then run `loadout devices approve dashboard --no-secrets` after generating the key in the dashboard.
 - Walk the `docs/dashboard-smoke.md` checklist together against their real `loadoutd`. Fix any issue found, redeploy.
 - This is a stop-and-confirm point: do not deploy without the user's go-ahead at that moment (the Vercel account + the CORS origin are theirs to set).

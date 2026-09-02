@@ -67,7 +67,7 @@ Each is a short, task-shaped guide, cross-linked, accurate to the real commands:
 
 ### Task 3: Scrub personal identifiers + wire the repo + prepare the push
 
-**Files:** Edit the committed Phase 8b plan docs (`docs/superpowers/plans/2026-09-01-phase-8b-*.md`) to remove personal Vercel identifiers (the account slug `wbarakats-projects` and the team ID `team_...`), replacing them with a neutral placeholder (e.g. "the owner's Vercel team"). Prepare (do NOT push) the remote wiring.
+**Files:** Edit the committed Phase 8b plan docs (`docs/superpowers/plans/2026-09-01-phase-8b-*.md`) to remove personal Vercel identifiers (the account slug and the team ID), replacing them with a neutral placeholder (e.g. "the owner's Vercel team"). Prepare (do NOT push) the remote wiring.
 
 **Behavior:**
 - **Scrub the working tree:** grep the whole repo (tracked files only) for the personal identifiers — the Vercel team id (`team_` + the hash), the account slug, the deployment URL, the user's email, any absolute `/Users/<name>/...` paths in committed docs — and replace them with neutral placeholders. Note: these are in DOC files (plans), not code. (Deep history rewrite is out of scope; the repo is new/private-going-public, and the identifiers are non-secret personal handles — scrubbing the tip + noting the history is sufficient; flag if a true secret is found in history, which would need a real rewrite.)

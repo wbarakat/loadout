@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go + BurntSushi/toml + `filippo.io/age` (the one new dependency, sanctioned by spec §13). Server: stdlib net/http, file storage. No SQLite/Postgres in v1 (decision 12's "small local index" = a JSON index under flock; revisit at scale).
 
-**Spec:** `/Users/waleed/loadout/PLAN.md` v3.1 — §8 invariants (esp. 8: ciphertext-only server), §11 security model, §12 Phase 4, §16 decisions 11-13.
+**Spec:** `~/loadout/PLAN.md` v3.1 — §8 invariants (esp. 8: ciphertext-only server), §11 security model, §12 Phase 4, §16 decisions 11-13.
 
 ## Global Constraints
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go stdlib + the existing deps (toml, age). No new dependencies. Reuse `internal/vault` (item write/scaffold) and `internal/adapter`'s managed-block marker semantics (single source of truth for the `loadout:begin/end` strip).
 
-**Spec:** `/Users/waleed/loadout/PLAN.md` and the Phase 9 design `docs/superpowers/specs/2026-09-02-phase-9-adoption-design.md`. **Authoritative per-tool source map (every path/format/exclusion detail):** the implementer receives `scratchpad/phase-9-import-source-map.md` — READ §0 (Loadout footprint to exclude), §1 (claude-code), §2 (codex), §8 (reliability). It pins the exact locations, markers, and formats.
+**Spec:** `~/loadout/PLAN.md` and the Phase 9 design `docs/superpowers/specs/2026-09-02-phase-9-adoption-design.md`. **Authoritative per-tool source map (every path/format/exclusion detail):** the implementer receives `scratchpad/phase-9-import-source-map.md` — READ §0 (Loadout footprint to exclude), §1 (claude-code), §2 (codex), §8 (reliability). It pins the exact locations, markers, and formats.
 
 ## Global Constraints
 

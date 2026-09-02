@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go (stdlib CLI, no framework), `github.com/BurntSushi/toml` (the only dependency), `git` on PATH for vault history, Go `testing` package.
 
-**Spec:** `/Users/waleed/loadout/PLAN.md` (Phase 1 section, plus sections 4, 6, 7).
+**Spec:** `~/loadout/PLAN.md` (Phase 1 section, plus sections 4, 6, 7).
 
 ## Global Constraints
 
@@ -63,7 +63,7 @@ Test files sit next to their package as `*_test.go` in the external test package
 - [ ] **Step 1: Create the module**
 
 ```bash
-cd /Users/waleed/loadout
+cd ~/loadout
 go mod init loadout.dev/loadout
 go get github.com/BurntSushi/toml@latest
 ```
@@ -2214,7 +2214,7 @@ run "loadout sync" again.
 - [ ] **Step 2: Run a sandboxed smoke test**
 
 ```bash
-cd /Users/waleed/loadout && go build -o /tmp/loadout ./cmd/loadout
+cd ~/loadout && go build -o /tmp/loadout ./cmd/loadout
 export LOADOUT_HOME=/tmp/lo-smoke
 HOME=/tmp/lo-home /tmp/loadout init
 HOME=/tmp/lo-home /tmp/loadout add skill test-skill

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go + BurntSushi/toml + filippo.io/age (all existing). No new dependencies.
 
-**Spec:** `/Users/waleed/loadout/PLAN.md` v3.1 — §4 (secret item), §8 invariant 10 (the secret security spine), §11 (security model), §12 Phase 5.
+**Spec:** `~/loadout/PLAN.md` v3.1 — §4 (secret item), §8 invariant 10 (the secret security spine), §11 (security model), §12 Phase 5.
 
 ## Global Constraints — the secret security spine (invariant 10)
 

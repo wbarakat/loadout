@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go stdlib (encoding/json, bufio, net/http) + toml + age. No new dependencies.
 
-**Spec:** `/Users/waleed/loadout/PLAN.md` — §7 (verbs), §8 invariant 10 (no value leak — now also over MCP), §11, §12 Phase 6.
+**Spec:** `~/loadout/PLAN.md` — §7 (verbs), §8 invariant 10 (no value leak — now also over MCP), §11, §12 Phase 6.
 
 ## Global Constraints — invariant 10 extends to MCP
 

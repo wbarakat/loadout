@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go stdlib + BurntSushi/toml. No new dependencies.
 
-**Spec:** `/Users/waleed/loadout/PLAN.md` v3 — sections 4 (adapters), 7 (contract), 8 (invariants), 12 (Phase 3: "the adapter kit must make a new adapter cost under one day").
+**Spec:** `~/loadout/PLAN.md` v3 — sections 4 (adapters), 7 (contract), 8 (invariants), 12 (Phase 3: "the adapter kit must make a new adapter cost under one day").
 
 ## Verified paths (controller, this machine, 2026-08-31, read-only)
 

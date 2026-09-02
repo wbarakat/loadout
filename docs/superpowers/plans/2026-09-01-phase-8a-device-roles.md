@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go stdlib + toml + age (all existing). No new dependencies.
 
-**Spec:** `/Users/waleed/loadout/PLAN.md` — §8 invariant 10, §11, §12 Phase 8a.
+**Spec:** `~/loadout/PLAN.md` — §8 invariant 10, §11, §12 Phase 8a.
 
 ## Global Constraints — the no-secrets guarantee
 
