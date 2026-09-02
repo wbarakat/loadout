@@ -30,6 +30,9 @@ commands:
   doctor                     find problems and show the fix for each one
   log                        show the vault history
   undo                       revert to the state before the last change
+  import [SOURCE...] [--skills] [--memory] [--project DIR] [--dry-run]
+                             pull skills and memory from installed agent tools
+                             (claude-code, codex) into the vault as drafts
   review                     list draft items awaiting review
   review keep KIND/NAME      mark a draft item kept
   review drop KIND/NAME      delete a draft item
@@ -134,6 +137,8 @@ func Run(out, errOut io.Writer, args []string) int {
 			return 2
 		}
 		return cmdUndo(out, errOut, m)
+	case "import":
+		return cmdImport(out, errOut, args[1:], m)
 	case "review":
 		return cmdReview(out, errOut, args[1:], m)
 	case "secret":
