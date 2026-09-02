@@ -9,7 +9,9 @@ import (
 const usage = `usage: loadout <command>
 
 commands:
-  init                       first-run wizard: detect installed agent tools,
+  init [--yes] [--tools a,b,...] [--no-import]
+       [--remote URL --token-file PATH] [--project-memory]
+                             first-run wizard: detect installed agent tools,
                              create the vault (or keep an existing one),
                              enable+configure their adapters, offer to
                              import their skills/memory as drafts, and
@@ -17,6 +19,17 @@ commands:
                              Prompts over stdin; every prompt has a
                              default, so it is also safe to run
                              unattended with empty stdin.
+                             --yes skips every prompt for an unattended,
+                             headless install (an agent or CI): it enables
+                             adapters for --tools (or every detected tool
+                             when --tools is absent), imports unless you
+                             pass --no-import, and connects a remote only
+                             when you pass both --remote URL and
+                             --token-file PATH. The token comes from that
+                             file, never from the command line, and never
+                             appears in any output. Add --project-memory
+                             to also pull per-project or per-profile
+                             memory during the import.
   add skill NAME [--by WHO]  add a skill
   add memory NAME [--by WHO] add a memory fact
   show KIND/NAME             print an item's file
@@ -97,10 +110,7 @@ func Run(out, errOut io.Writer, args []string) int {
 	}
 	switch args[0] {
 	case "init":
-		if rejectExtraArgs(errOut, args[1:]) {
-			return 2
-		}
-		return cmdInit(out, errOut, m)
+		return cmdInit(out, errOut, args[1:], m)
 	case "add":
 		return cmdAdd(out, errOut, args[1:], m)
 	case "show":
@@ -172,10 +182,12 @@ func Run(out, errOut io.Writer, args []string) int {
 
 // rejectExtraArgs prints the usage text to errOut and reports true
 // when rest holds an argument. Run calls this for every verb that
-// takes no positional arguments — init, sync (after its own
-// "--dry-run" extraction), status, doctor, list, context, device,
-// log, undo, and help — so an unknown argument never rides along on
-// a mutating verb such as sync or undo.
+// takes no positional arguments — sync (after its own "--dry-run"
+// extraction), status, doctor, list, context, device, log, undo, and
+// help — so an unknown argument never rides along on a mutating verb
+// such as sync or undo. init has its own flags now, so it parses and
+// rejects its own leftover arguments (parseInitArgs) instead of
+// calling this.
 func rejectExtraArgs(errOut io.Writer, rest []string) bool {
 	if len(rest) == 0 {
 		return false

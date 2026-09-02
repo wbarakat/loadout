@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"loadout.dev/loadout/internal/remote"
 	"loadout.dev/loadout/internal/vault"
@@ -270,5 +271,251 @@ func TestInitWizardNoInputOnlyCreatesTheVault(t *testing.T) {
 	}
 	if _, err := remote.Load(v); err == nil {
 		t.Fatalf("no input must connect no remote")
+	}
+}
+
+// runHeadless runs "loadout init --yes" plus any extra args through
+// the real Run/cmdInit entrypoint. It never touches os.Stdin: the
+// whole point of the headless path is that it reads no prompts at
+// all.
+func runHeadless(t *testing.T, extra ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code = Run(&out, &errOut, append([]string{"init", "--yes"}, extra...))
+	return out.String(), errOut.String(), code
+}
+
+// TestInitHeadlessInstallsUnattended proves the core headless path: no
+// stdin is fed at all (setupInitEnv leaves os.Stdin untouched), yet
+// "loadout init --yes" creates the vault, enables adapters for every
+// detected tool, imports the fixture skill as a draft, and prints its
+// closing summary exactly once — Task 3's review Minor (a): the
+// summary must never appear twice, once from the wizard and once from
+// the import report.
+func TestInitHeadlessInstallsUnattended(t *testing.T) {
+	home, vaultRoot, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+	mustMkdirAll(t, filepath.Join(home, ".codex"))
+	mustWriteFixture(t, filepath.Join(home, ".claude", "skills", "mytool", "SKILL.md"),
+		"---\nname: mytool\ndescription: run mytool's own checks before a commit\n---\n\nRun the mytool checks before every commit.\n")
+
+	out, errOut, code := runHeadless(t)
+	if code != 0 {
+		t.Fatalf("init --yes failed: %s", errOut)
+	}
+	if !strings.Contains(out, "created the vault at "+vaultRoot) {
+		t.Fatalf("must print the vault path, got %q", out)
+	}
+
+	v, err := vault.Open(vaultRoot)
+	if err != nil {
+		t.Fatalf("vault must open: %v", err)
+	}
+	if !v.Manifest.Adapters["claude-code"].Enabled {
+		t.Fatalf("claude-code adapter must be enabled, got %+v", v.Manifest.Adapters["claude-code"])
+	}
+	if !v.Manifest.Adapters["codex"].Enabled {
+		t.Fatalf("codex adapter must be enabled, got %+v", v.Manifest.Adapters["codex"])
+	}
+
+	if _, err := os.Stat(filepath.Join(vaultRoot, "skills", "mytool", "SKILL.md")); err != nil {
+		t.Fatalf("the imported skill must land in the vault as a draft: %v", err)
+	}
+
+	if n := strings.Count(out, "loadout sync --remote"); n != 1 {
+		t.Fatalf("the next-steps summary must print exactly once, got it %d times in %q", n, out)
+	}
+}
+
+// TestInitHeadlessNeverReadsStdin proves the deterministic, unattended
+// contract directly: os.Stdin is a pipe whose write end is never
+// closed and never written to, so any read from it blocks forever.
+// "loadout init --yes" must still return promptly.
+func TestInitHeadlessNeverReadsStdin(t *testing.T) {
+	home, _, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origStdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = origStdin
+		r.Close()
+		w.Close()
+	})
+
+	done := make(chan struct {
+		out, errOut string
+		code        int
+	}, 1)
+	go func() {
+		var out, errOut bytes.Buffer
+		code := Run(&out, &errOut, []string{"init", "--yes"})
+		done <- struct {
+			out, errOut string
+			code        int
+		}{out.String(), errOut.String(), code}
+	}()
+
+	select {
+	case res := <-done:
+		if res.code != 0 {
+			t.Fatalf("init --yes failed: %s", res.errOut)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("loadout init --yes must never read stdin, but it blocked as if it did")
+	}
+}
+
+// TestInitHeadlessNoImportSkipsImport proves --no-import imports
+// nothing, even though a real candidate skill sits right there in the
+// fixture — the headless mirror of
+// TestInitWizardDeclineImportImportsNothing.
+func TestInitHeadlessNoImportSkipsImport(t *testing.T) {
+	home, vaultRoot, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+	mustWriteFixture(t, filepath.Join(home, ".claude", "skills", "mytool", "SKILL.md"),
+		"---\nname: mytool\ndescription: x\n---\n\nbody\n")
+
+	out, errOut, code := runHeadless(t, "--no-import")
+	if code != 0 {
+		t.Fatalf("init --yes --no-import failed: %s", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(vaultRoot, "skills", "mytool")); !os.IsNotExist(err) {
+		t.Fatalf("--no-import must import nothing, got err=%v", err)
+	}
+	if strings.Contains(out, "import preview") {
+		t.Fatalf("--no-import must not even preview, got %q", out)
+	}
+}
+
+// TestInitHeadlessToolsFilterEnablesOnlyNamed proves --tools narrows
+// adapter-enabling to exactly the named tools, leaving every other
+// detected tool's adapter untouched (disabled).
+func TestInitHeadlessToolsFilterEnablesOnlyNamed(t *testing.T) {
+	home, vaultRoot, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+	mustMkdirAll(t, filepath.Join(home, ".codex"))
+
+	out, errOut, code := runHeadless(t, "--tools", "claude-code")
+	if code != 0 {
+		t.Fatalf("init --yes --tools claude-code failed: %s", errOut)
+	}
+	if !strings.Contains(out, "enabled adapters: claude-code") {
+		t.Fatalf("must report only claude-code enabled, got %q", out)
+	}
+
+	v, err := vault.Open(vaultRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Manifest.Adapters["claude-code"].Enabled {
+		t.Fatalf("claude-code adapter must be enabled, got %+v", v.Manifest.Adapters["claude-code"])
+	}
+	if v.Manifest.Adapters["codex"].Enabled {
+		t.Fatalf("codex adapter must stay disabled, got %+v", v.Manifest.Adapters["codex"])
+	}
+}
+
+// TestInitHeadlessRemoteTokenFileNeverEchoed proves --remote +
+// --token-file writes the remote configuration with the token read
+// from the file, while the token value itself never appears anywhere
+// in the headless path's printed output — the headless mirror of
+// TestInitWizardRemoteTokenFileNeverEchoed.
+func TestInitHeadlessRemoteTokenFileNeverEchoed(t *testing.T) {
+	home, vaultRoot, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+
+	const secretToken = "sk-super-secret-loadoutd-token-9f31c2"
+	tokenPath := filepath.Join(home, "token.txt")
+	mustWriteFixture(t, tokenPath, secretToken+"\n")
+
+	out, errOut, code := runHeadless(t, "--no-import", "--remote", "http://localhost:9999", "--token-file", tokenPath)
+	if code != 0 {
+		t.Fatalf("init --yes --remote failed: %s", errOut)
+	}
+	combined := out + errOut
+	if strings.Contains(combined, secretToken) {
+		t.Fatalf("the token must never appear in output, got %q", combined)
+	}
+
+	v, err := vault.Open(vaultRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := remote.Load(v)
+	if err != nil {
+		t.Fatalf("remote config must load: %v", err)
+	}
+	if cfg.URL != "http://localhost:9999" {
+		t.Fatalf("bad remote url: %q", cfg.URL)
+	}
+	if cfg.Token != secretToken {
+		t.Fatalf("the remote config must hold the real token read from the file, got %q", cfg.Token)
+	}
+}
+
+// TestInitHeadlessRemoteWithoutTokenFileErrors proves --remote with no
+// --token-file is a clear error that leaves no partial remote
+// configuration behind.
+func TestInitHeadlessRemoteWithoutTokenFileErrors(t *testing.T) {
+	home, vaultRoot, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+
+	out, errOut, code := runHeadless(t, "--no-import", "--remote", "http://localhost:9999")
+	if code == 0 {
+		t.Fatalf("--remote with no --token-file must fail, got exit 0, stdout=%q", out)
+	}
+	if !strings.Contains(errOut, "--token-file") {
+		t.Fatalf("the error must name --token-file, got %q", errOut)
+	}
+
+	// The flags are rejected before init ever creates the vault, so no
+	// vault — and so no partial remote config — exists at all.
+	if _, err := os.Stat(filepath.Join(vaultRoot, "loadout.toml")); !os.IsNotExist(err) {
+		t.Fatalf("a bad --remote/--token-file pairing must create no vault, got err=%v", err)
+	}
+}
+
+// TestInitHeadlessBogusToolErrors proves an unknown --tools name is a
+// clear error naming every valid (detected) tool, and changes nothing
+// in the vault.
+func TestInitHeadlessBogusToolErrors(t *testing.T) {
+	home, vaultRoot, _ := setupInitEnv(t)
+	mustMkdirAll(t, filepath.Join(home, ".claude"))
+	mustMkdirAll(t, filepath.Join(home, ".codex"))
+
+	out, errOut, code := runHeadless(t, "--tools", "bogus")
+	if code == 0 {
+		t.Fatalf("--tools bogus must fail, got exit 0, stdout=%q", out)
+	}
+	if !strings.Contains(errOut, "bogus") {
+		t.Fatalf("the error must name the bad tool, got %q", errOut)
+	}
+	if !strings.Contains(errOut, "claude-code") || !strings.Contains(errOut, "codex") {
+		t.Fatalf("the error must list the valid, detected tool names, got %q", errOut)
+	}
+
+	if _, err := os.Stat(filepath.Join(vaultRoot, "loadout.toml")); !os.IsNotExist(err) {
+		t.Fatalf("a bad --tools name must create no vault, got err=%v", err)
+	}
+}
+
+// TestInitHelpNamesHeadlessFlags proves "loadout help" documents every
+// headless flag, not just the wizard's own prose.
+func TestInitHelpNamesHeadlessFlags(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Run(&out, &errOut, []string{"help"})
+	if code != 0 {
+		t.Fatalf("help failed: %s", errOut.String())
+	}
+	text := out.String()
+	for _, flag := range []string{"--yes", "--tools", "--no-import", "--remote", "--token-file", "--project-memory"} {
+		if !strings.Contains(text, flag) {
+			t.Fatalf("help must name %s, got %q", flag, text)
+		}
 	}
 }

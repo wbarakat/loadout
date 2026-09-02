@@ -192,7 +192,7 @@ func cmdImport(out, errOut io.Writer, args []string, m mode) int {
 		printJSON(out, toImportResultJSON(result, parsed.dryRun))
 		return 0
 	}
-	renderImportReport(out, result, parsed.dryRun)
+	renderImportReport(out, result, parsed.dryRun, true)
 	return 0
 }
 
@@ -265,7 +265,16 @@ const importNextSteps = "these items landed as drafts. Review them: loadout revi
 // store. The warnings section always renders, even when, as for
 // claude-code and codex today, the list comes back empty — a later
 // source's caveat must not need a second code path to appear.
-func renderImportReport(out io.Writer, result importer.ImportResult, dryRun bool) {
+//
+// showNextSteps controls only the trailing "loadout review" /
+// "loadout sync --remote" next-step line on a real (non-dryRun) run:
+// "loadout import" itself passes true, since that line is its own
+// report's closing summary. "loadout init"'s wizard passes false for
+// the same real result, since runInit already prints that same line
+// once as its own closing summary — printing it here too would
+// duplicate it. dryRun's own "nothing was written" line is unaffected
+// either way.
+func renderImportReport(out io.Writer, result importer.ImportResult, dryRun, showNextSteps bool) {
 	verb := "imported"
 	if dryRun {
 		verb = "would import (dry run — nothing written)"
@@ -296,7 +305,9 @@ func renderImportReport(out io.Writer, result importer.ImportResult, dryRun bool
 		fmt.Fprintln(out, "nothing was written. Run loadout import (without --dry-run) to import for real.")
 		return
 	}
-	fmt.Fprintln(out, importNextSteps)
+	if showNextSteps {
+		fmt.Fprintln(out, importNextSteps)
+	}
 }
 
 // formatImportWarning renders one Warning as "<tool>: <path> —
