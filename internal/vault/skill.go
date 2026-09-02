@@ -9,7 +9,11 @@ import (
 type Skill struct {
 	Name        string
 	Description string
-	Dir         string
+	// Body is the skill's content below its frontmatter block, the
+	// same shape ListFacts already returns for a Fact. Dedup uses it
+	// to hash a skill's content.
+	Body string
+	Dir  string
 	// By names who wrote this skill, for example "human" or
 	// "claude-code". Empty for a skill scaffolded before provenance
 	// tracking existed.
@@ -54,10 +58,11 @@ func ListSkills(v *Vault) ([]Skill, error) {
 		if err != nil {
 			continue
 		}
-		fields, _ := parseFrontmatter(raw)
+		fields, body := parseFrontmatter(raw)
 		skills = append(skills, Skill{
 			Name:        e.Name(),
 			Description: fields["description"],
+			Body:        body,
 			Dir:         dir,
 			By:          fields["by"],
 			At:          fields["at"],

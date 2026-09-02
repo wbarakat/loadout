@@ -142,6 +142,31 @@ func managedBlockDryMsg(path, want string) string {
 	return "memory: block would change"
 }
 
+// StripManagedBlock removes Loadout's own managed block from content
+// and returns what is left. It reuses the same well-formed rule
+// WriteManagedBlock and checkManagedBlockDamage apply: exactly one
+// begin mark before one end mark. When no marks are present, content
+// comes back unchanged and damaged is false. When the marks are
+// present but malformed — two begins, an orphan end, an end before a
+// begin — content comes back unchanged and damaged is true, so the
+// caller can skip the file and warn instead of guessing at a partial
+// strip. Text outside the block is never touched.
+func StripManagedBlock(content string) (native string, damaged bool) {
+	beginCount := strings.Count(content, beginMark)
+	endCount := strings.Count(content, endMark)
+	if beginCount == 0 && endCount == 0 {
+		return content, false
+	}
+	if beginCount == 1 && endCount == 1 {
+		i := strings.Index(content, beginMark)
+		j := strings.Index(content, endMark)
+		if i < j {
+			return content[:i] + content[j+len(endMark):], false
+		}
+	}
+	return content, true
+}
+
 // ReadManagedBlock returns the trimmed block content, and whether a
 // well-formed block exists. Return ("", false) if marks are damaged or
 // missing.
