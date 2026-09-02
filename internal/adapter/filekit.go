@@ -136,12 +136,13 @@ func (a fileAdapter) Apply(v *vault.Vault, dry bool) (Report, error) {
 		return report, nil
 	}
 	skillsDir := vault.ExpandPath(a.cfg.SkillsDir)
-	applied, pruned, blocked, err := LinkSkills(skills, v.SkillsDir(), skillsDir, dry)
+	applied, adopted, pruned, blocked, err := LinkSkills(skills, v.SkillsDir(), skillsDir, dry)
 	if err != nil {
 		return report, err
 	}
 	report.Linked = len(applied)
 	report.Applied = append(report.Applied, applied...)
+	report.Adopted = orEmpty(adopted)
 	report.Pruned = orEmpty(pruned)
 	report.Blocked = orEmpty(blocked)
 	return report, nil

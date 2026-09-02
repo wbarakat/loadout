@@ -2,19 +2,24 @@ package adapter
 
 // Report holds what one adapter did on a sync. Applied and Pruned
 // name the actions taken (or, under a dry run, the actions that
-// would run). Blocked names each skill a real file or a foreign
-// link stops Loadout from linking; a blocked skill is not an error.
-// Applied, Pruned, and Blocked are always present, never null: every
-// Apply call starts them as empty slices, so a caller can range over
-// them without a nil check. Linked counts the skills Applied names
-// as linked (or, on a dry run, as needing a link); it excludes the
-// memory entries Applied also carries. Error holds the message from
-// a non-nil error Apply returned; it is empty on success.
+// would run). Adopted names each skill whose link occupied a foreign
+// symlink that Loadout replaced with its own link (or, under a dry
+// run, would replace); adoption never touches a real file or a real
+// directory. Blocked names each skill a real file, a real directory,
+// or an unresolvable link stops Loadout from linking; a blocked
+// skill is not an error. Applied, Adopted, Pruned, and Blocked are
+// always present, never null: every Apply call starts them as empty
+// slices, so a caller can range over them without a nil check.
+// Linked counts the skills Applied names as linked (or, on a dry
+// run, as needing a link); it excludes the memory entries Applied
+// also carries. Error holds the message from a non-nil error Apply
+// returned; it is empty on success.
 type Report struct {
 	Adapter string   `json:"adapter"`
 	DryRun  bool     `json:"dry_run,omitempty"`
 	Linked  int      `json:"linked"`
 	Applied []string `json:"applied"` // "skill/x: linked", "memory: block written"
+	Adopted []string `json:"adopted"` // "skill/x: adopted a foreign link"
 	Pruned  []string `json:"pruned"`  // "skill/x: stale link removed"
 	Blocked []string `json:"blocked"` // "skill/x: a real file or a foreign link occupies PATH. Fix: move or remove PATH."
 	Error   string   `json:"error,omitempty"`
@@ -29,6 +34,7 @@ func newReport(adapterName string, dry bool) Report {
 		Adapter: adapterName,
 		DryRun:  dry,
 		Applied: []string{},
+		Adopted: []string{},
 		Pruned:  []string{},
 		Blocked: []string{},
 	}

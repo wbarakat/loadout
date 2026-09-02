@@ -52,21 +52,60 @@ func blockedLinkMsg(name, path string) string {
 	return fmt.Sprintf("skill/%s: a real file or a foreign link occupies %s. Fix: move or remove %s.", name, path, path)
 }
 
+// adoptedLinkMsg names a skill whose foreign link Loadout replaced
+// with its own link.
+func adoptedLinkMsg(name string) string {
+	return fmt.Sprintf("skill/%s: adopted a foreign link", name)
+}
+
+// atomicSymlink creates a symlink to oldname at newname, replacing
+// whatever symlink currently sits at newname, without ever leaving
+// newname missing. It builds the new link under a temporary name in
+// newname's own directory, then renames it over newname; a rename
+// within one directory is atomic on every platform Loadout supports.
+//
+// Call atomicSymlink only when newname is already known (by a prior
+// Lstat) to be a symlink, not a real file or a real directory —
+// atomicSymlink itself does not check, and a rename over a real file
+// or directory would destroy it.
+func atomicSymlink(oldname, newname string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(newname), ".loadout-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	tmp.Close()
+	if err := os.Remove(tmpPath); err != nil {
+		return err
+	}
+	if err := os.Symlink(oldname, tmpPath); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, newname); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 // LinkSkills creates one symlink per skill in dir, pointing into the
 // vault skills directory. It repairs a Loadout-owned link that has
-// the wrong target. It never replaces a real file, a real directory,
-// or a symlink that points outside the vault skills directory — it
-// reports those names as blocked, not as an error. After linking, it
-// removes every Loadout-owned link in dir that no longer matches a
-// listed skill.
+// the wrong target. When a symlink already occupies the path but
+// points outside the vault skills directory — a foreign link, made
+// by the user or another tool before Loadout ever ran — LinkSkills
+// adopts it: it replaces the foreign link with its own, since the
+// vault owns a skill with this exact name. It never replaces a real
+// file or a real directory; it reports those names as blocked, not
+// as an error. After linking, it removes every Loadout-owned link in
+// dir that no longer matches a listed skill.
 //
 // If dry is true, LinkSkills changes nothing on disk. It still walks
-// the same decisions and returns the same applied, pruned, and
-// blocked lists it would return for a real run.
-func LinkSkills(skills []vault.Skill, vaultSkillsDir, dir string, dry bool) (applied, pruned, blocked []string, err error) {
+// the same decisions and returns the same applied, adopted, pruned,
+// and blocked lists it would return for a real run.
+func LinkSkills(skills []vault.Skill, vaultSkillsDir, dir string, dry bool) (applied, adopted, pruned, blocked []string, err error) {
 	if !dry {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
 	vaultSkillsDir = canonicalPath(vaultSkillsDir)
@@ -80,17 +119,30 @@ func LinkSkills(skills []vault.Skill, vaultSkillsDir, dir string, dry bool) (app
 		switch {
 		case statErr == nil && fi.Mode()&os.ModeSymlink != 0:
 			cur, readErr := os.Readlink(linkPath)
-			if readErr != nil || !isVaultOwned(cur, vaultSkillsDir) {
-				// A foreign link: it is the user's. Leave it.
+			switch {
+			case readErr != nil:
+				// The link cannot be read: leave it, it is the
+				// user's.
 				blocked = append(blocked, blockedLinkMsg(s.Name, linkPath))
 				continue
-			}
-			if canonicalPath(cur) == canonicalPath(s.Dir) {
+			case !isVaultOwned(cur, vaultSkillsDir):
+				// A foreign link, but the vault owns a skill with
+				// this exact name: adopt the link rather than
+				// refuse it.
+				if !dry {
+					if err := atomicSymlink(s.Dir, linkPath); err != nil {
+						return applied, adopted, pruned, blocked, err
+					}
+				}
+				adopted = append(adopted, adoptedLinkMsg(s.Name))
 				continue
-			}
-			if !dry {
-				if err := os.Remove(linkPath); err != nil {
-					return applied, pruned, blocked, err
+			case canonicalPath(cur) == canonicalPath(s.Dir):
+				continue
+			default:
+				if !dry {
+					if err := os.Remove(linkPath); err != nil {
+						return applied, adopted, pruned, blocked, err
+					}
 				}
 			}
 		case statErr == nil:
@@ -100,19 +152,19 @@ func LinkSkills(skills []vault.Skill, vaultSkillsDir, dir string, dry bool) (app
 		}
 		if !dry {
 			if err := os.Symlink(s.Dir, linkPath); err != nil {
-				return applied, pruned, blocked, err
+				return applied, adopted, pruned, blocked, err
 			}
 		}
 		applied = append(applied, fmt.Sprintf("skill/%s: linked", s.Name))
 	}
 	removed, err := pruneLinks(dir, vaultSkillsDir, want, dry)
 	if err != nil {
-		return applied, pruned, blocked, err
+		return applied, adopted, pruned, blocked, err
 	}
 	for _, name := range removed {
 		pruned = append(pruned, fmt.Sprintf("skill/%s: stale link removed", name))
 	}
-	return applied, pruned, blocked, nil
+	return applied, adopted, pruned, blocked, nil
 }
 
 // pruneLinks removes every Loadout-owned symlink in dir that does not

@@ -16,7 +16,7 @@ func TestOrphanLinksReportsStaleVaultOwnedLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	skills := []vault.Skill{{Name: "a", Dir: aDir}}
-	if _, _, _, err := LinkSkills(skills, vaultSkillsDir, dir, false); err != nil {
+	if _, _, _, _, err := LinkSkills(skills, vaultSkillsDir, dir, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -43,7 +43,7 @@ func TestOrphanLinksSkipsSkillsStillListed(t *testing.T) {
 		t.Fatal(err)
 	}
 	skills := []vault.Skill{{Name: "a", Dir: aDir}}
-	if _, _, _, err := LinkSkills(skills, vaultSkillsDir, dir, false); err != nil {
+	if _, _, _, _, err := LinkSkills(skills, vaultSkillsDir, dir, false); err != nil {
 		t.Fatal(err)
 	}
 	if ps := orphanLinks(skills, vaultSkillsDir, dir); len(ps) != 0 {
