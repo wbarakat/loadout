@@ -103,8 +103,10 @@ vault:
   and memory file, even if you name that tool in `--tools` again — a
   path you customized by hand is never reset back to the detected
   default. Only a newly enabled adapter adopts the detected default.
-- An adapter you left disabled on a prior run stays disabled; a
-  re-run never turns one on that you did not ask for.
+- A re-run enables the adapters for every tool it detects — or for
+  the tools you name with `--tools`. So a tool you disabled but still
+  have installed is turned back on by a plain re-run. To keep it off,
+  run with `--tools` naming only the tools you want.
 
 ## Next steps
 

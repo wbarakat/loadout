@@ -75,6 +75,13 @@ check runs for every referenced secret before any of them is
 decrypted, so one permitted secret can never carry another,
 unpermitted one along.
 
+A request with **no** `{{secret:<name>}}` placeholder uses no secret,
+so the allowlist does not apply — it is a plain fetch that can reach
+any host. The `allowed_hosts` gate only governs requests that carry a
+secret. (The local stdio server runs as you, so a general fetch is no
+more powerful than a shell; the gate exists to stop a secret from
+leaving for a host you did not allow.)
+
 Only once every check passes does Loadout decrypt, substitute, and
 send the request. It also:
 
