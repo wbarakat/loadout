@@ -1,0 +1,46 @@
+name: release
+
+# Build prebuilt binaries and publish a GitHub Release when you push a
+# version tag, for example: git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build release archives
+        run: |
+          set -eu
+          mkdir -p dist
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            echo "building ${os}/${arch}"
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -ldflags "-s -w" -o loadout ./cmd/loadout
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -ldflags "-s -w" -o loadoutd ./cmd/loadoutd
+            tar -czf "dist/loadout_${os}_${arch}.tar.gz" loadout loadoutd
+            rm -f loadout loadoutd
+          done
+          cd dist && shasum -a 256 *.tar.gz > checksums.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt

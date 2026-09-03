@@ -5,14 +5,26 @@ secrets. This guide installs it and runs the first-run wizard. For
 what Loadout does after install, see [import.md](import.md),
 [secrets.md](secrets.md), and the [README](../README.md).
 
-## Build or install the binary
+## Install the binary
+
+Download the latest release binaries (`loadout` and `loadoutd`):
 
 ```
-go install ./cmd/loadout
+curl -fsSL https://raw.githubusercontent.com/wbarakat/loadout/main/install.sh | sh
 ```
 
-This puts `loadout` on your `PATH`. `loadout help` prints the full
-command list at any time.
+Prebuilt binaries for macOS and Linux are also on the
+[Releases](https://github.com/wbarakat/loadout/releases) page.
+
+To build from source with Go 1.23 or newer:
+
+```
+git clone https://github.com/wbarakat/loadout
+cd loadout
+go install ./cmd/loadout ./cmd/loadoutd
+```
+
+`loadout help` prints the full command list at any time.
 
 ## Run the wizard
 
