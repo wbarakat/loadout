@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -162,6 +163,12 @@ func snapshotTree(t *testing.T, root string) map[string]string {
 	snap := map[string]string{}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			// A .git background-maintenance lock file can vanish between
+			// readdir and lstat; a gone file is not part of the tree's
+			// content, so skip it rather than fail.
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {
@@ -172,6 +179,9 @@ func snapshotTree(t *testing.T, root string) map[string]string {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		rel, err := filepath.Rel(root, path)

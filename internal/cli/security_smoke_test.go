@@ -19,6 +19,7 @@ package cli_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http/httptest"
@@ -41,6 +42,14 @@ func walkTreeForDummy(t *testing.T, root, needle string) []string {
 	var hits []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			// A file can vanish between readdir and lstat: the vault's own
+			// .git runs background maintenance that creates and removes
+			// lock files (for example .git/objects/maintenance.lock). A
+			// file that is already gone holds no persistent plaintext to
+			// leak, so skip it rather than fail the whole walk.
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		if info.IsDir() {
@@ -48,6 +57,12 @@ func walkTreeForDummy(t *testing.T, root, needle string) []string {
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
+			// Same race on the read side: a file present at walk time can
+			// be gone by the time we open it. Ignore a vanished file;
+			// treat any other read error as fatal.
+			if errors.Is(readErr, os.ErrNotExist) {
+				return nil
+			}
 			t.Fatalf("cannot read %s while scanning for the dummy: %v", path, readErr)
 		}
 		if bytes.Contains(data, []byte(needle)) {
