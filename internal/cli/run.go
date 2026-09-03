@@ -64,8 +64,10 @@ commands:
                              Cursor keeps global User Rules in an internal
                              database. Loadout cannot import them.
   review                     list draft items awaiting review
-  review keep KIND/NAME      mark a draft item kept
-  review drop KIND/NAME      delete a draft item
+  review keep KIND/NAME...   mark one or more draft items kept
+  review drop KIND/NAME...   delete one or more draft items
+  review keep|drop --all [--by SOURCE] [--kind skill|memory] [--dry-run]
+                             act on every draft at once, in one undoable step
   secret add NAME --service SVC [--hook TEXT] [--rotate-after DUR] [--by WHO]
                              add a secret; the value is piped on stdin
   secret list [--json]       show every secret's metadata, never its value

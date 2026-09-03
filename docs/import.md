@@ -28,7 +28,7 @@ those tools. With no `SOURCE`, Loadout scans every tool it can find.
 
 ## What the report shows
 
-A real import prints a short summary — how many drafts it wrote, by
+A real import prints a short summary: how many drafts it wrote, by
 kind and by tool, how many duplicates it skipped, and a grouped digest
 of any warnings (for example `12  folders with no SKILL.md`). Add
 `--verbose` to see each item and each warning in full, or `--json` for
@@ -36,7 +36,7 @@ the complete machine-readable result.
 
 ## Memory scope
 
-By default, memory import pulls only **global** instruction files —
+By default, memory import pulls only **global** instruction files,
 for example Claude Code's `~/.claude/CLAUDE.md`, not a per-project
 `CLAUDE.md` inside a repository. Pass `--project-memory` to also pull
 per-project or per-profile memory, scoped to `--project DIR` or the
@@ -65,6 +65,37 @@ Drop the rest:
 loadout review drop <kind>/<name>
 ```
 
+### Reviewing many at once
+
+A first import can leave dozens of drafts, so `keep` and `drop` both
+take several addresses, or `--all`:
+
+```
+loadout review keep skill/tdd skill/deslop memory/claude-md
+loadout review keep --all
+```
+
+Use `--by` to act on one tool's batch, and `--kind` to act on skills or
+memory alone. The `--by` value is the item's provenance, as shown by
+`loadout review`:
+
+```
+loadout review keep --all --by import:claude-code
+loadout review drop --all --by import:codex
+loadout review keep --all --kind skill
+```
+
+Add `--dry-run` to list exactly what a command would act on, and change
+nothing:
+
+```
+loadout review drop --all --by import:codex --dry-run
+```
+
+A bulk action writes one history entry for the whole batch, so a single
+`loadout undo` reverses all of it. A bulk drop only ever deletes drafts:
+an item you already kept is never touched.
+
 Once you are done reviewing, project the kept items into every
 enabled tool and push them to your remote, if you configured one:
 
@@ -79,8 +110,8 @@ importing from two tools with overlapping content, never doubles up
 your vault:
 
 1. **Across sources.** Two candidates with the same kind, name, and
-   content — one from `claude-code`, say, and an identical one from
-   `codex` — collapse into one imported item.
+   content (one from `claude-code`, say, and an identical one from
+   `codex`) collapse into one imported item.
 2. **Against the vault.** A candidate whose name already exists in
    the vault, with matching content, is skipped and reported as
    deduped rather than imported again.

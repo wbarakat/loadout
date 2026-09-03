@@ -38,7 +38,11 @@ loadout sync --remote
   has a safe default, so you can press Enter through it.
 - `loadout review` lists the drafts. Keep one with
   `loadout review keep <kind>/<name>` or drop it with
-  `loadout review drop <kind>/<name>`.
+  `loadout review drop <kind>/<name>`. After a first import there are
+  usually many, so both take several names at once, or `--all`:
+  `loadout review keep --all --by import:claude-code`. Add `--dry-run`
+  to see what a command would do first. The whole batch is one step, so
+  `loadout undo` reverses it.
 - `loadout sync --remote` projects the vault into every enabled tool,
   then pushes it to your remote if you set one.
 
