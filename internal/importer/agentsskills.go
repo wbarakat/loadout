@@ -116,7 +116,10 @@ func scanSkillEntry(entryPath, tool, vaultSkillsDir string) (*CandidateSkill, []
 	files, fileWarnings := collectSkillFiles(realPath, tool)
 
 	if total, tooLarge := skillTooLarge(raw, files); tooLarge {
-		return nil, append(fileWarnings, tooLargeSkillWarning(tool, entryPath, name, total))
+		// The whole skill is skipped, so its per-file support-file
+		// warnings are moot noise — report only the one folder-too-large
+		// warning, not a warning per dropped file.
+		return nil, []Warning{tooLargeSkillWarning(tool, entryPath, name, total)}
 	}
 
 	return &CandidateSkill{

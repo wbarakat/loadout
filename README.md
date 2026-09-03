@@ -92,7 +92,7 @@ own.
 
 | Command | Purpose |
 |---|---|
-| `loadout import [SOURCE...] [--skills] [--memory] [--project DIR] [--project-memory] [--dry-run]` | Pull skills and memory from installed agent tools into the vault, as drafts. |
+| `loadout import [SOURCE...] [--skills] [--memory] [--project DIR] [--project-memory] [--dry-run] [--verbose]` | Pull skills and memory from installed agent tools into the vault, as drafts. |
 
 `SOURCE` is one of: `claude-code`, `codex`, `cursor`, `hermes`, `pi`,
 `gemini`, `droid`. With no `SOURCE`, Loadout scans every tool it can

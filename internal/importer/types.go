@@ -115,6 +115,12 @@ type Options struct {
 	// DryRun previews what RunImport would write, without writing
 	// anything.
 	DryRun bool
+	// Progress, when set, is called once with each source's name just
+	// before RunImport scans that source (after Detect reports it
+	// present). It exists only to drive a CLI progress indicator. A nil
+	// Progress — the default, and what every test uses — disables it.
+	// RunImport calls it inline, so it must not block.
+	Progress func(tool string)
 }
 
 // ItemRef names one item RunImport imported or deduped: its kind

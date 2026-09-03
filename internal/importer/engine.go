@@ -69,6 +69,9 @@ func RunImport(v *vault.Vault, sources []Source, ctx ImportCtx, opt Options) (Im
 		if !present {
 			continue
 		}
+		if opt.Progress != nil {
+			opt.Progress(src.Name())
+		}
 
 		if opt.Skills {
 			skills, warnings, err := src.Skills(ctx)

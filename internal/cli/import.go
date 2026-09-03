@@ -11,7 +11,7 @@ import (
 	"loadout.dev/loadout/internal/vault"
 )
 
-const importUsage = "usage: loadout import [SOURCE...] [--skills] [--memory] [--project DIR] [--project-memory] [--dry-run]\n" +
+const importUsage = "usage: loadout import [SOURCE...] [--skills] [--memory] [--project DIR] [--project-memory] [--dry-run] [--verbose]\n" +
 	"SOURCE is one of: claude-code, codex, cursor, hermes, pi, gemini, droid."
 
 // importRegistry lists every import Source loadout knows, in the
@@ -71,7 +71,10 @@ type importArgs struct {
 	sources        []string
 	skills, memory bool
 	dryRun         bool
-	project        string
+	// verbose prints the full per-item list and every warning verbatim,
+	// instead of the default concise summary and grouped warning digest.
+	verbose bool
+	project string
 	// projectMemory sets importer.ImportCtx.ProjectMemory — see FIX 4's
 	// doc comment there. The default (false) scopes memory to GLOBAL
 	// instruction files only.
@@ -94,6 +97,8 @@ func parseImportArgs(args []string) (importArgs, bool) {
 			a.projectMemory = true
 		case "--dry-run":
 			a.dryRun = true
+		case "--verbose", "-v":
+			a.verbose = true
 		case "--project":
 			if i+1 >= len(args) || args[i+1] == "" {
 				return importArgs{}, false
@@ -171,8 +176,21 @@ func cmdImport(out, errOut io.Writer, args []string, m mode) int {
 	}
 	defer release()
 
+	// A live spinner on stderr while the scan runs — but never in JSON
+	// mode (its output must stay a clean machine stream) and never when
+	// stderr is not a terminal (startSpinner returns a no-op there). The
+	// spinner names the tool being scanned as RunImport reaches it.
+	var sp *spinner
+	if m != modeJSON {
+		sp = startSpinner(errOut, "importing your skills and memory…")
+		opt.Progress = func(tool string) { sp.setLabel("scanning " + tool + "…") }
+	}
+
 	result, err := importer.RunImport(v, sources, ctx, opt)
 	if err != nil {
+		if sp != nil {
+			sp.stop()
+		}
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
@@ -182,17 +200,26 @@ func cmdImport(out, errOut io.Writer, args []string, m mode) int {
 	// remote is a separate, explicit "loadout sync --remote" the
 	// report's own next-step line names.
 	if !parsed.dryRun {
+		if sp != nil {
+			sp.setLabel("saving…")
+		}
 		if err := vault.Snapshot(v, "import"); err != nil {
+			if sp != nil {
+				sp.stop()
+			}
 			fmt.Fprintln(errOut, err)
 			return 1
 		}
+	}
+	if sp != nil {
+		sp.stop()
 	}
 
 	if m == modeJSON {
 		printJSON(out, toImportResultJSON(result, parsed.dryRun))
 		return 0
 	}
-	renderImportReport(out, result, parsed.dryRun, true)
+	renderImportReport(out, result, parsed.dryRun, true, parsed.verbose)
 	return 0
 }
 
@@ -258,13 +285,16 @@ func toImportResultJSON(result importer.ImportResult, dryRun bool) importResultJ
 // anywhere — a human review, then a push.
 const importNextSteps = "these items landed as drafts. Review them: loadout review, or the dashboard. Then run loadout sync --remote to push them."
 
-// renderImportReport writes a concise, human report of result to out:
-// the items imported (or, under dryRun, previewed), the counts by
-// kind and by tool, the deduped count, every skipped item with its
-// reason, and every warning a source hit while reading its native
-// store. The warnings section always renders, even when, as for
-// claude-code and codex today, the list comes back empty — a later
-// source's caveat must not need a second code path to appear.
+// renderImportReport writes a human report of result to out.
+//
+// By default it is a concise summary: one headline naming the count of
+// drafts by kind and by tool, the deduplicated count, and a grouped
+// digest of warnings (one line per category, most frequent first)
+// rather than every warning verbatim. The per-item list is shown only
+// for a dry run — where the list IS the preview a caller asked for — or
+// under verbose. verbose also expands the warning digest back to the
+// full, per-item list. This keeps a real import over dozens of tools to
+// a few readable lines instead of a wall of every item and every path.
 //
 // showNextSteps controls only the trailing "loadout review" /
 // "loadout sync --remote" next-step line on a real (non-dryRun) run:
@@ -274,39 +304,157 @@ const importNextSteps = "these items landed as drafts. Review them: loadout revi
 // once as its own closing summary — printing it here too would
 // duplicate it. dryRun's own "nothing was written" line is unaffected
 // either way.
-func renderImportReport(out io.Writer, result importer.ImportResult, dryRun, showNextSteps bool) {
-	verb := "imported"
-	if dryRun {
-		verb = "would import (dry run — nothing written)"
-	}
+func renderImportReport(out io.Writer, result importer.ImportResult, dryRun, showNextSteps, verbose bool) {
+	// Headline.
 	if len(result.Imported) == 0 {
-		fmt.Fprintf(out, "%s: nothing new to import.\n", verb)
+		if dryRun {
+			fmt.Fprintln(out, "nothing new to import (dry run — nothing written).")
+		} else {
+			fmt.Fprintln(out, "nothing new to import.")
+		}
 	} else {
-		fmt.Fprintf(out, "%s:\n", verb)
+		verb := "imported"
+		suffix := ""
+		if dryRun {
+			verb = "would import"
+			suffix = " (dry run — nothing written)"
+		}
+		fmt.Fprintf(out, "%s %s%s — %s\n", verb,
+			countNoun(len(result.Imported), "draft", "drafts"), suffix,
+			importCountsLine(result.Imported))
+	}
+
+	// The full per-item list: a dry run is a preview, so it always lists
+	// what it would write; a real run lists items only under verbose.
+	if len(result.Imported) > 0 && (dryRun || verbose) {
 		for _, ref := range result.Imported {
 			fmt.Fprintf(out, "  %s/%s (%s)\n", ref.Kind, ref.Name, ref.Tool)
 		}
-		fmt.Fprintln(out, importCountsLine(result.Imported))
 	}
-	fmt.Fprintln(out, countNoun(len(result.Deduped), "item deduped", "items deduped"))
-	if len(result.Skipped) > 0 {
-		fmt.Fprintln(out, "skipped:")
-		for _, w := range result.Skipped {
-			fmt.Fprintln(out, "  "+formatImportWarning(w))
-		}
+
+	if n := len(result.Deduped); n > 0 {
+		fmt.Fprintln(out, countNoun(n, "duplicate skipped", "duplicates skipped"))
 	}
-	if len(result.Warnings) > 0 {
-		fmt.Fprintln(out, "warnings:")
-		for _, w := range result.Warnings {
-			fmt.Fprintln(out, "  "+formatImportWarning(w))
-		}
+
+	// Warnings and skips: a grouped digest by default, the full per-item
+	// list under verbose. Both a Skipped entry (an item declined at
+	// write time) and a Warning (a problem a source hit while reading)
+	// are things worth the reader's attention, so the concise digest
+	// counts them together.
+	if verbose {
+		renderWarningsVerbose(out, result.Skipped, result.Warnings)
+	} else {
+		notes := make([]importer.Warning, 0, len(result.Skipped)+len(result.Warnings))
+		notes = append(notes, result.Skipped...)
+		notes = append(notes, result.Warnings...)
+		renderWarningDigest(out, notes)
 	}
+
 	if dryRun {
 		fmt.Fprintln(out, "nothing was written. Run loadout import (without --dry-run) to import for real.")
 		return
 	}
 	if showNextSteps {
 		fmt.Fprintln(out, importNextSteps)
+	}
+}
+
+// renderWarningsVerbose prints every skip and every warning verbatim,
+// each with its full path and reason — the detail --verbose asks for,
+// and the exact shape the report used before the concise default.
+func renderWarningsVerbose(out io.Writer, skipped, warnings []importer.Warning) {
+	if len(skipped) > 0 {
+		fmt.Fprintln(out, "skipped:")
+		for _, w := range skipped {
+			fmt.Fprintln(out, "  "+formatImportWarning(w))
+		}
+	}
+	if len(warnings) > 0 {
+		fmt.Fprintln(out, "warnings:")
+		for _, w := range warnings {
+			fmt.Fprintln(out, "  "+formatImportWarning(w))
+		}
+	}
+}
+
+// renderWarningDigest collapses a long list of warnings into a short
+// digest: one "<count>  <label>" line per category, most frequent
+// first, so 60 per-item warnings read as a handful of lines. A reason
+// the digest does not recognize keeps its own text as the label, still
+// deduped and counted, so nothing important is silently hidden. It
+// prints nothing at all when there are no warnings.
+func renderWarningDigest(out io.Writer, notes []importer.Warning) {
+	if len(notes) == 0 {
+		return
+	}
+	type bucket struct {
+		label string
+		count int
+		order int // first-seen index, for a stable tie-break
+	}
+	buckets := map[string]*bucket{}
+	order := 0
+	for _, w := range notes {
+		label := warningCategory(w.Reason)
+		if label == "" {
+			// Unrecognized reason: keep it verbatim so it is never hidden.
+			label = w.Reason
+		}
+		b, ok := buckets[label]
+		if !ok {
+			b = &bucket{label: label, order: order}
+			order++
+			buckets[label] = b
+		}
+		b.count++
+	}
+	list := make([]*bucket, 0, len(buckets))
+	for _, b := range buckets {
+		list = append(list, b)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].count != list[j].count {
+			return list[i].count > list[j].count
+		}
+		return list[i].order < list[j].order
+	})
+
+	fmt.Fprintf(out, "%s:\n", countNoun(len(notes), "warning", "warnings"))
+	for _, b := range list {
+		fmt.Fprintf(out, "  %3d  %s\n", b.count, b.label)
+	}
+	fmt.Fprintln(out, "run loadout import --verbose to see each one.")
+}
+
+// warningCategory maps a warning's reason to a short, human category
+// label for the digest, or "" when the reason has no known category and
+// should keep its own text. It matches on stable fragments of the
+// reasons this package's own sources emit, so many per-item warnings
+// (one per skill folder, one per oversized file) collapse to one line.
+func warningCategory(reason string) string {
+	switch {
+	case strings.Contains(reason, "is too large"):
+		return "skills too large to import"
+	case strings.Contains(reason, "per-file limit"):
+		return "oversized support files dropped"
+	case strings.Contains(reason, "no readable SKILL.md"):
+		return "folders with no SKILL.md"
+	case strings.Contains(reason, "not a skill folder"):
+		return "entries that are not skill folders"
+	case strings.Contains(reason, "no valid frontmatter"):
+		return "skills with no valid frontmatter"
+	case strings.Contains(reason, "points outside the skill folder"):
+		return "support files pointing outside the folder"
+	case strings.Contains(reason, "dangling"):
+		return "dangling skill links"
+	case strings.Contains(reason, "per-project memory sources skipped"):
+		return "per-project memory skipped — use --project-memory"
+	case strings.Contains(reason, "try the import again"):
+		return "files the tool was writing — retry later"
+	case strings.Contains(reason, "User Rules"):
+		return `Cursor "User Rules" — copy from Cursor Settings → Rules`
+	default:
+		return ""
 	}
 }
 

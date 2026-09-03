@@ -228,12 +228,15 @@ func scanSkillsDir(dir, vaultSkillsDir, pluginsDir string) ([]CandidateSkill, []
 		}
 
 		files, fileWarnings := collectSkillFiles(realPath, "claude-code")
-		warnings = append(warnings, fileWarnings...)
 
 		if total, tooLarge := skillTooLarge(raw, files); tooLarge {
+			// The whole skill is skipped, so its per-file support-file
+			// warnings are moot noise — report only the one
+			// folder-too-large warning, not a warning per dropped file.
 			warnings = append(warnings, tooLargeSkillWarning("claude-code", entryPath, name, total))
 			continue
 		}
+		warnings = append(warnings, fileWarnings...)
 
 		skills = append(skills, CandidateSkill{
 			Name:        name,

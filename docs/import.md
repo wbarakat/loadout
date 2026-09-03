@@ -8,7 +8,7 @@ import again later, or to import from just one tool.
 ## Run it
 
 ```
-loadout import [SOURCE...] [--skills] [--memory] [--project DIR] [--project-memory] [--dry-run]
+loadout import [SOURCE...] [--skills] [--memory] [--project DIR] [--project-memory] [--dry-run] [--verbose]
 ```
 
 `SOURCE` is one of: `claude-code`, `codex`, `cursor`, `hermes`, `pi`,
@@ -22,6 +22,17 @@ those tools. With no `SOURCE`, Loadout scans every tool it can find.
 - `--dry-run` previews exactly what a real run would import, and
   writes nothing. Run this first when you are not sure what will
   land.
+- `--verbose` (or `-v`) prints every imported item and every warning
+  in full. Without it, the report is a short summary: the counts, and
+  a grouped digest of warnings by category.
+
+## What the report shows
+
+A real import prints a short summary — how many drafts it wrote, by
+kind and by tool, how many duplicates it skipped, and a grouped digest
+of any warnings (for example `12  folders with no SKILL.md`). Add
+`--verbose` to see each item and each warning in full, or `--json` for
+the complete machine-readable result.
 
 ## Memory scope
 

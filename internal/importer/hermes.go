@@ -134,7 +134,12 @@ func scanHermesSkills(skillsDir, tool, vaultSkillsDir string) ([]CandidateSkill,
 	var warnings []Warning
 	for _, e := range entries {
 		name := e.Name()
-		if name == ".bundled_manifest" || name == ".archive" || bundled[name] {
+		// Skip every hidden entry silently: Hermes keeps its own
+		// internals here as dotfiles and dot-directories — .bundled_manifest
+		// and .archive (handled above and here), plus .curator_state,
+		// .curator_backups, .hub, .usage.json and the like. None is a user
+		// skill folder, so none should warn as "not a skill folder".
+		if strings.HasPrefix(name, ".") || bundled[name] {
 			continue
 		}
 		s, w := scanSkillEntry(filepath.Join(skillsDir, name), tool, vaultSkillsDir)

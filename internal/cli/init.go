@@ -533,15 +533,13 @@ func enableAdapters(v *vault.Vault, created bool, tools []string, detected []Det
 	return nil
 }
 
-// runInitImport runs the same dry-run-then-real import sequence
-// "loadout import" itself runs, over every registered source.
+// runInitImport runs one real import over every registered source.
 // projectMemory sets importer.ImportCtx.ProjectMemory (false — global
 // instruction files only — for the interactive wizard, opts.ProjectMemory
 // for the headless "--yes" path; see importArgs.projectMemory's own
-// doc comment in import.go for what the flag means). It prints the
-// dry-run preview, then the real report, reusing renderImportReport so
-// the wizard's import output otherwise matches the plain verb's
-// exactly — except the real report's own trailing "loadout review" /
+// doc comment in import.go for what the flag means). It reuses
+// renderImportReport so the wizard's import output matches the plain
+// verb's concise summary — except the trailing "loadout review" /
 // "loadout sync --remote" next-step line is suppressed
 // (showNextSteps: false): runInit already prints that same line,
 // once, as its own closing summary (initNextSteps), so a real import
@@ -565,21 +563,30 @@ func runInitImport(v *vault.Vault, home string, projectMemory bool, out io.Write
 	}
 	defer release()
 
-	fmt.Fprintln(out, "import preview (dry run):")
-	dryResult, err := importer.RunImport(v, importRegistry, ctx, importer.Options{Skills: true, Memory: true, DryRun: true})
+	// One real import, with a live spinner naming each tool as it is
+	// scanned (a no-op when out is not a terminal, e.g. a test buffer).
+	// The wizard used to run the import twice — a dry-run preview and
+	// then the real run — printing two full reports back to back; that
+	// was the doubled wall of output. One run and one concise summary
+	// replaces it.
+	sp := startSpinner(out, "importing your skills and memory…")
+	opt := importer.Options{
+		Skills:   true,
+		Memory:   true,
+		Progress: func(tool string) { sp.setLabel("scanning " + tool + "…") },
+	}
+	realResult, err := importer.RunImport(v, importRegistry, ctx, opt)
 	if err != nil {
+		sp.stop()
 		return err
 	}
-	renderImportReport(out, dryResult, true, false)
-
-	realResult, err := importer.RunImport(v, importRegistry, ctx, importer.Options{Skills: true, Memory: true, DryRun: false})
-	if err != nil {
-		return err
-	}
+	sp.setLabel("saving…")
 	if err := vault.Snapshot(v, "import"); err != nil {
+		sp.stop()
 		return err
 	}
-	renderImportReport(out, realResult, false, false)
+	sp.stop()
+	renderImportReport(out, realResult, false, false, false)
 	return nil
 }
 
