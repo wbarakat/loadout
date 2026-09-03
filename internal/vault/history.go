@@ -11,8 +11,26 @@ import (
 	"strings"
 )
 
+// gitQuietOpts are passed to every git call the vault makes. They stop
+// git from starting background housekeeping inside the vault:
+//
+//   - gc.auto=0 stops "git gc --auto", which git runs on its own after
+//     a commit once enough loose objects pile up.
+//   - maintenance.auto=false stops the newer background maintenance
+//     task that replaces it.
+//
+// A vault is small and Loadout commits often, so this housekeeping buys
+// nothing. It also writes and then deletes lock files under .git
+// (.git/objects/maintenance.lock, for example) while other code is
+// reading the vault tree, which makes any walk of the vault race with a
+// file that disappears. Passing the options on each call, rather than
+// writing them into the repository config at init, covers vaults that
+// already exist as well as new ones.
+var gitQuietOpts = []string{"-c", "gc.auto=0", "-c", "maintenance.auto=false"}
+
 func git(v *Vault, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", v.Root}, args...)...)
+	full := append([]string{"-C", v.Root}, gitQuietOpts...)
+	cmd := exec.Command("git", append(full, args...)...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out

@@ -20,6 +20,13 @@ jobs:
         with:
           go-version: '1.23'
 
+      - name: Configure git identity
+        # The vault commits to its own git repository during tests. A
+        # fresh runner has no global identity, so give it one.
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+
       - name: Run tests
         run: go test ./...
 
@@ -36,7 +43,7 @@ jobs:
             tar -czf "dist/loadout_${os}_${arch}.tar.gz" loadout loadoutd
             rm -f loadout loadoutd
           done
-          cd dist && shasum -a 256 *.tar.gz > checksums.txt
+          cd dist && sha256sum *.tar.gz > checksums.txt
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
