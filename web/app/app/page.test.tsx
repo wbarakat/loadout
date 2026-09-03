@@ -1,10 +1,10 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DashConfig } from "../lib/dash/config.js";
-import { withReviewKept } from "../lib/dash/review.js";
-import type { Vault } from "../lib/vault/model.js";
-import type { TarEntry } from "../lib/vault/tar.js";
-import { NotApprovedError, SyncConflictError } from "../lib/vault/sync.js";
+import type { DashConfig } from "../../lib/dash/config.js";
+import { withReviewKept } from "../../lib/dash/review.js";
+import type { Vault } from "../../lib/vault/model.js";
+import type { TarEntry } from "../../lib/vault/tar.js";
+import { NotApprovedError, SyncConflictError } from "../../lib/vault/sync.js";
 import Home from "./page.js";
 
 function fileEntry(name: string, text: string): TarEntry {
@@ -19,7 +19,7 @@ function fileEntry(name: string, text: string): TarEntry {
 // covered end-to-end by ConnectForm.test.tsx). Declared via `vi.hoisted`
 // so the ref exists before this hoisted `vi.mock` factory runs.
 const connectStubRef = vi.hoisted(() => ({ current: null as unknown }));
-vi.mock("../components/ConnectForm.js", () => ({
+vi.mock("../../components/ConnectForm.js", () => ({
   ConnectForm: (props: { onConnected: (r: unknown) => void }) => (
     <div>
       <h1>Connect to loadoutd</h1>
@@ -93,7 +93,7 @@ const FIXTURE_ENTRIES: TarEntry[] = [
 const loadConfigMock = vi.fn<() => DashConfig | null>();
 const clearConfigMock = vi.fn();
 const setLastVersionMock = vi.fn();
-vi.mock("../lib/dash/config.js", () => ({
+vi.mock("../../lib/dash/config.js", () => ({
   loadConfig: () => loadConfigMock(),
   clearConfig: () => clearConfigMock(),
   saveConfig: vi.fn(),
@@ -101,10 +101,10 @@ vi.mock("../lib/dash/config.js", () => ({
 }));
 
 const sessionFromMock = vi.fn();
-vi.mock("../lib/dash/session.js", async () => {
+vi.mock("../../lib/dash/session.js", async () => {
   const actual =
-    await vi.importActual<typeof import("../lib/dash/session.js")>(
-      "../lib/dash/session.js",
+    await vi.importActual<typeof import("../../lib/dash/session.js")>(
+      "../../lib/dash/session.js",
     );
   return {
     ...actual,
@@ -114,10 +114,10 @@ vi.mock("../lib/dash/session.js", async () => {
 
 const pullMock = vi.fn();
 const commitEditMock = vi.fn();
-vi.mock("../lib/vault/sync.js", async () => {
+vi.mock("../../lib/vault/sync.js", async () => {
   const actual =
-    await vi.importActual<typeof import("../lib/vault/sync.js")>(
-      "../lib/vault/sync.js",
+    await vi.importActual<typeof import("../../lib/vault/sync.js")>(
+      "../../lib/vault/sync.js",
     );
   return {
     ...actual,
@@ -128,10 +128,10 @@ vi.mock("../lib/vault/sync.js", async () => {
 });
 
 const recipientForMock = vi.fn();
-vi.mock("../lib/vault/age.js", async () => {
+vi.mock("../../lib/vault/age.js", async () => {
   const actual =
-    await vi.importActual<typeof import("../lib/vault/age.js")>(
-      "../lib/vault/age.js",
+    await vi.importActual<typeof import("../../lib/vault/age.js")>(
+      "../../lib/vault/age.js",
     );
   return {
     ...actual,
