@@ -67,25 +67,70 @@ func adoptedFolderMsg(name string) string {
 	return fmt.Sprintf("skill/%s: adopted the source folder", name)
 }
 
-// skillBody returns raw with a leading frontmatter block removed, and
-// the rest trimmed. Loadout rewrites a skill's frontmatter when it
-// imports one: it keeps the original keys and adds by:, at:, and
-// review:. Two copies of the same skill therefore differ in their
-// frontmatter while their bodies stay byte-identical, so the body is
-// what tells us whether the vault already holds this file's content.
-func skillBody(raw []byte) []byte {
+// splitSkillMD splits a SKILL.md file into its frontmatter block and
+// its body. A file with no frontmatter fence returns an empty
+// frontmatter and the whole trimmed text as the body.
+func splitSkillMD(raw []byte) (frontmatter, body string) {
 	const fence = "---\n"
 	text := strings.TrimPrefix(string(raw), "\ufeff")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	if !strings.HasPrefix(text, fence) {
-		return []byte(strings.TrimSpace(text))
+		return "", strings.TrimSpace(text)
 	}
 	rest := text[len(fence):]
 	end := strings.Index(rest, "\n---")
 	if end < 0 {
-		return []byte(strings.TrimSpace(text))
+		return "", strings.TrimSpace(text)
 	}
-	return []byte(strings.TrimSpace(strings.TrimPrefix(rest[end+len("\n---"):], "\n")))
+	return rest[:end], strings.TrimSpace(strings.TrimPrefix(rest[end+len("\n---"):], "\n"))
+}
+
+// skillBody returns just the body of a SKILL.md file.
+func skillBody(raw []byte) []byte {
+	_, body := splitSkillMD(raw)
+	return []byte(body)
+}
+
+// frontmatterLines returns the non-blank lines of a frontmatter block,
+// each trimmed of trailing spaces. Comparing whole lines keeps this
+// honest about YAML that Loadout's own flat key/value model does not
+// represent, such as a nested "requires:" block: its indented lines are
+// lines like any other, so a copy that dropped them cannot match.
+func frontmatterLines(frontmatter string) []string {
+	var out []string
+	for _, line := range strings.Split(frontmatter, "\n") {
+		line = strings.TrimRight(line, " \t")
+		if strings.TrimSpace(line) != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// vaultKeepsFrontmatter reports whether every line of the source's
+// frontmatter still appears in the vault copy's frontmatter.
+//
+// Loadout ADDS lines when it imports a skill (by:, at:, review:), which
+// is fine. What is not fine is DROPPING one. Loadout's frontmatter model
+// is flat "key: value" pairs, so importing a skill whose frontmatter
+// holds anything else \u2014 a "version:" it does not carry through, or a
+// nested "requires:" block \u2014 silently loses those lines. Replacing such
+// a source folder with a link would destroy the only copy of them.
+// Requiring every source line to survive keeps the no-data-loss promise
+// even where the import itself is lossy.
+func vaultKeepsFrontmatter(srcRaw, vaultRaw []byte) bool {
+	srcFM, _ := splitSkillMD(srcRaw)
+	vaultFM, _ := splitSkillMD(vaultRaw)
+	have := make(map[string]bool)
+	for _, line := range frontmatterLines(vaultFM) {
+		have[line] = true
+	}
+	for _, line := range frontmatterLines(srcFM) {
+		if !have[line] {
+			return false
+		}
+	}
+	return true
 }
 
 // vaultCapturesFolder reports whether the vault's own copy of a skill
@@ -96,7 +141,12 @@ func skillBody(raw []byte) []byte {
 // nothing, because every one of its files is already in the vault.
 // Every regular file under srcDir must exist at the same relative path
 // under vaultDir with identical bytes. SKILL.md is the one exception:
-// it is compared by body, since Loadout rewrites frontmatter on import.
+// its body must match exactly, and every line of its frontmatter must
+// survive in the vault copy (vaultKeepsFrontmatter). The vault may ADD
+// frontmatter on import, but a copy that DROPPED a line — a "version:",
+// or a nested "requires:" block that Loadout's flat key/value model
+// cannot carry — does not hold the source's content, and replacing that
+// folder with a link would destroy the only copy of those lines.
 //
 // srcDir must itself hold a SKILL.md whose body matches the vault's.
 // That match is what identifies srcDir as the source the vault's copy
@@ -144,6 +194,12 @@ func vaultCapturesFolder(srcDir, vaultDir string) bool {
 		}
 		if rel == "SKILL.md" {
 			if !bytes.Equal(skillBody(srcData), skillBody(vaultData)) {
+				return stop()
+			}
+			// The body matching is not enough: the vault must also have
+			// kept every frontmatter line. An import through Loadout's
+			// flat key/value model drops anything it cannot represent.
+			if !vaultKeepsFrontmatter(srcData, vaultData) {
 				return stop()
 			}
 			sawSkillMD = true

@@ -353,15 +353,72 @@ func parseFrontmatter(raw []byte) (map[string]string, string) {
 	if end < 0 {
 		return fields, text
 	}
-	for _, line := range strings.Split(rest[:end], "\n") {
+	lines := strings.Split(rest[:end], "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		// An indented line belongs to the structure above it, not to a
+		// key of its own. A block scalar's own continuation lines are
+		// consumed below, so anything still indented here is part of a
+		// nested structure this flat model does not represent: skip it
+		// rather than read "bins" out of "requires:\n  bins: [...]".
+		if isIndented(line) {
+			continue
+		}
 		k, v, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
 		}
-		fields[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		key := strings.TrimSpace(k)
+		val := strings.TrimSpace(v)
+		// A YAML block scalar ("description: >" or "description: |",
+		// with an optional chomping or indentation indicator) carries
+		// its text on the following, more-indented lines. Without this,
+		// the value read is the bare ">" marker and the whole text is
+		// lost, which produced vault skills whose frontmatter said
+		// "description: >" and nothing else — invalid to every tool
+		// that validates a skill.
+		if isBlockScalarMarker(val) {
+			var parts []string
+			for j := i + 1; j < len(lines); j++ {
+				next := lines[j]
+				if strings.TrimSpace(next) == "" {
+					continue // a paragraph break inside the scalar
+				}
+				if !isIndented(next) {
+					break
+				}
+				parts = append(parts, strings.TrimSpace(next))
+				i = j
+			}
+			val = strings.Join(parts, " ")
+		}
+		fields[key] = val
 	}
 	body := strings.TrimPrefix(rest[end+len("\n---"):], "\n")
 	return fields, strings.TrimSpace(body)
+}
+
+// isIndented reports whether a line starts with a space or a tab.
+func isIndented(s string) bool {
+	return s != "" && (s[0] == ' ' || s[0] == '\t')
+}
+
+// isBlockScalarMarker reports whether a YAML value introduces a block
+// scalar: ">" (folded) or "|" (literal), each with an optional chomping
+// indicator ("-", "+") or explicit indentation digit.
+func isBlockScalarMarker(v string) bool {
+	if v == "" || (v[0] != '>' && v[0] != '|') {
+		return false
+	}
+	for _, c := range v[1:] {
+		if c != '-' && c != '+' && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // normalizeText strips a leading UTF-8 byte order mark and normalizes

@@ -92,6 +92,48 @@ func AddFact(v *Vault, name, by string) (string, error) {
 // that into its own warning. This guard runs here, not only in a
 // caller, since WriteSkillContent is the one place that actually
 // turns a key into a path on disk.
+// yamlScalar renders s so it is safe to place after "key: " in a
+// frontmatter block. Most descriptions are plain prose and pass through
+// unchanged. A value that would make the line ambiguous or invalid YAML
+// is double-quoted instead: one holding a colon-space (an imported
+// description really did read "patterns including: inflated symbolism"),
+// one opening with a YAML indicator character such as ">" or "|", one
+// ending in a colon, or an empty one. Without this, a valid description
+// could still produce frontmatter no tool can parse.
+func yamlScalar(s string) string {
+	if s == "" {
+		return `""`
+	}
+	needsQuote := strings.Contains(s, ": ") ||
+		strings.Contains(s, " #") ||
+		strings.HasSuffix(s, ":") ||
+		strings.ContainsAny(s[:1], `>|&*!%@`+"`"+`"'#?:,[]{}-`) ||
+		strings.ContainsAny(s, "\n\r\t")
+	if !needsQuote {
+		return s
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 func WriteSkillContent(v *Vault, name, description, body, by string, at time.Time, files map[string][]byte) (path string, skipped []string, err error) {
 	if !namePattern.MatchString(name) {
 		return "", nil, fmt.Errorf("use a kebab-case name, for example: deploy-checks")
@@ -104,7 +146,7 @@ func WriteSkillContent(v *Vault, name, description, body, by string, at time.Tim
 		return "", nil, err
 	}
 	path = filepath.Join(dir, "SKILL.md")
-	content := "---\nname: " + name + "\ndescription: " + description + "\n" +
+	content := "---\nname: " + name + "\ndescription: " + yamlScalar(description) + "\n" +
 		provenanceLinesAt(by, at) + "---\n\n" + strings.TrimSpace(body) + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", nil, err

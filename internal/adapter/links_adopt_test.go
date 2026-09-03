@@ -143,6 +143,73 @@ func TestLinkSkillsRefusesFolderWithDifferentBody(t *testing.T) {
 	}
 }
 
+// TestLinkSkillsRefusesFolderWhenVaultDroppedFrontmatter is the
+// regression test for a real data loss caught on a live machine. The
+// sentry-cli skill carried frontmatter Loadout's flat key/value model
+// does not represent — a version: line and a nested requires: block —
+// and the import silently dropped them. The bodies still matched, so a
+// body-only check adopted the folder and deleted the only copy of those
+// lines. Frontmatter the vault dropped must block the adoption.
+func TestLinkSkillsRefusesFolderWhenVaultDroppedFrontmatter(t *testing.T) {
+	vaultSkillsDir := t.TempDir()
+	dst := t.TempDir()
+
+	vaultSkill := filepath.Join(vaultSkillsDir, "sentry-cli")
+	writeSourceSkill(t, vaultSkill,
+		"name: sentry-cli\ndescription: d\nby: import:claude-code\nreview: draft\n",
+		"Use the sentry CLI.", nil)
+
+	srcFolder := filepath.Join(dst, "sentry-cli")
+	writeSourceSkill(t, srcFolder,
+		"name: sentry-cli\ndescription: d\nversion: 0.37.0\nrequires:\n  bins: [\"sentry\"]\n  auth: true\n",
+		"Use the sentry CLI.", nil)
+
+	_, adopted, _, blocked, err := adapter.LinkSkills(
+		[]vault.Skill{{Name: "sentry-cli", Dir: vaultSkill}}, vaultSkillsDir, dst, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adopted) != 0 {
+		t.Fatalf("a folder whose frontmatter the vault dropped must never be adopted, got %v", adopted)
+	}
+	if len(blocked) != 1 {
+		t.Fatalf("want the folder reported blocked, got %v", blocked)
+	}
+	got, err := os.ReadFile(filepath.Join(srcFolder, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"version: 0.37.0", "requires:", `bins: ["sentry"]`, "auth: true"} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("the source frontmatter line %q was lost: %q", want, got)
+		}
+	}
+}
+
+// TestLinkSkillsAdoptsWhenVaultOnlyAddedFrontmatter proves the normal
+// import case still adopts: the vault added by:/at:/review: and dropped
+// nothing.
+func TestLinkSkillsAdoptsWhenVaultOnlyAddedFrontmatter(t *testing.T) {
+	vaultSkillsDir := t.TempDir()
+	dst := t.TempDir()
+
+	vaultSkill := filepath.Join(vaultSkillsDir, "a")
+	writeSourceSkill(t, vaultSkill,
+		"name: a\ndescription: d\nby: import:claude-code\nat: 2026-01-01T00:00:00Z\nreview: draft\n",
+		"Do the thing.", nil)
+	srcFolder := filepath.Join(dst, "a")
+	writeSourceSkill(t, srcFolder, "name: a\ndescription: d\n", "Do the thing.", nil)
+
+	_, adopted, _, blocked, err := adapter.LinkSkills(
+		[]vault.Skill{{Name: "a", Dir: vaultSkill}}, vaultSkillsDir, dst, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 0 || len(adopted) != 1 {
+		t.Fatalf("added-only frontmatter must still adopt, adopted=%v blocked=%v", adopted, blocked)
+	}
+}
+
 // TestLinkSkillsDryRunDoesNotAdoptSourceFolder proves a dry run reports
 // the folder adoption it would make without touching the folder. The
 // foreign-link equivalent is TestLinkSkillsDryRunAdoptsNothingOnDisk.
