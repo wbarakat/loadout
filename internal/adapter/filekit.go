@@ -189,17 +189,17 @@ func (a fileAdapter) Check(v *vault.Vault) []Problem {
 		case memoryBlock:
 			got, ok := ReadManagedBlock(memoryFile)
 			if !ok || got != strings.TrimSpace(renderProjection(facts)) {
-				ps = append(ps, Problem{a.name, "the memory block is missing or stale", "run: loadout sync"})
+				ps = append(ps, Problem{a.name, "the memory block is missing or stale", FixBySync})
 			}
 		case memoryImport:
 			got, ok := ReadManagedBlock(memoryFile)
 			if !ok || got != a.importLine(v) {
-				ps = append(ps, Problem{a.name, "the memory import block is missing or stale", "run: loadout sync"})
+				ps = append(ps, Problem{a.name, "the memory import block is missing or stale", FixBySync})
 			}
 			renderPath := filepath.Join(v.RenderDir(), "memory.md")
 			data, err := os.ReadFile(renderPath)
 			if err != nil || string(data) != renderProjection(facts) {
-				ps = append(ps, Problem{a.name, "the rendered memory is missing or stale", "run: loadout sync"})
+				ps = append(ps, Problem{a.name, "the rendered memory is missing or stale", FixBySync})
 			}
 		}
 	}

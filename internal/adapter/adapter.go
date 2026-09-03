@@ -9,6 +9,27 @@ type Problem struct {
 	Fix     string
 }
 
+// FixBySync is the Fix text carried by every Problem that a plain
+// "loadout sync" resolves on its own. A caller compares a Problem's Fix
+// against it to tell pending work apart from a conflict the user has to
+// resolve by hand. A fresh install reports only pending work, since
+// nothing has been projected yet.
+const FixBySync = "run: loadout sync"
+
+// PendingSyncOnly reports whether ps holds at least one problem and
+// every one of them is resolved by a plain "loadout sync".
+func PendingSyncOnly(ps []Problem) bool {
+	if len(ps) == 0 {
+		return false
+	}
+	for _, p := range ps {
+		if p.Fix != FixBySync {
+			return false
+		}
+	}
+	return true
+}
+
 // Adapter projects the vault into one tool.
 type Adapter interface {
 	Name() string

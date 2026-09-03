@@ -38,7 +38,7 @@ func orphanLinks(skills []vault.Skill, vaultSkillsDir, dir string) []Problem {
 		if err != nil || !isVaultOwned(cur, vaultSkillsDir) {
 			continue
 		}
-		ps = append(ps, Problem{Detail: fmt.Sprintf("stale link %s", path), Fix: "run: loadout sync"})
+		ps = append(ps, Problem{Detail: fmt.Sprintf("stale link %s", path), Fix: FixBySync})
 	}
 	return ps
 }

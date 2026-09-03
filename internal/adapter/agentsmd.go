@@ -79,7 +79,7 @@ func (a AgentsMD) Check(v *vault.Vault) []Problem {
 	for _, target := range a.Cfg.Targets {
 		got, ok := ReadManagedBlock(vault.ExpandPath(target))
 		if !ok || got != strings.TrimSpace(content) {
-			ps = append(ps, Problem{a.Name(), "the block in " + target + " is missing or stale", "run: loadout sync"})
+			ps = append(ps, Problem{a.Name(), "the block in " + target + " is missing or stale", FixBySync})
 		}
 	}
 	return ps

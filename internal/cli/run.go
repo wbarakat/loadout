@@ -78,6 +78,7 @@ commands:
                              decrypt secrets, inject them into a child process's
                              environment, exec it, and exit with its exit code
   mcp                        serve the vault over MCP as JSON-RPC on stdio
+  version                    print the loadout version
   help                       show this message
 
 flags:
@@ -107,6 +108,12 @@ func Run(out, errOut io.Writer, args []string) int {
 	m := modeText
 	if wantJSON {
 		m = modeJSON
+	}
+	if args[0] == "version" || args[0] == "--version" {
+		if rejectExtraArgs(errOut, args[1:]) {
+			return 2
+		}
+		return cmdVersion(out, m)
 	}
 	switch args[0] {
 	case "init":

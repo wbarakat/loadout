@@ -34,12 +34,13 @@ jobs:
         run: |
           set -eu
           mkdir -p dist
+          LDFLAGS="-s -w -X loadout.dev/loadout/internal/cli.Version=${GITHUB_REF_NAME}"
           for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
             os="${target%/*}"
             arch="${target#*/}"
             echo "building ${os}/${arch}"
-            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -ldflags "-s -w" -o loadout ./cmd/loadout
-            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -ldflags "-s -w" -o loadoutd ./cmd/loadoutd
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o loadout ./cmd/loadout
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o loadoutd ./cmd/loadoutd
             tar -czf "dist/loadout_${os}_${arch}.tar.gz" loadout loadoutd
             rm -f loadout loadoutd
           done

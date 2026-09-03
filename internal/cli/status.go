@@ -70,10 +70,19 @@ func cmdStatus(out, errOut io.Writer, m mode) int {
 	}
 	fmt.Fprintf(out, "vault: %s\nskills: %d\nmemory facts: %d\n", v.Root, len(skills), len(facts))
 	for _, a := range adapter.Enabled(v) {
-		if ps := a.Check(v); len(ps) == 0 {
+		ps := a.Check(v)
+		switch {
+		case len(ps) == 0:
 			fmt.Fprintf(out, "%s: in sync\n", a.Name())
-		} else {
-			fmt.Fprintf(out, "%s: %d problems (run: loadout doctor)\n", a.Name(), len(ps))
+		case adapter.PendingSyncOnly(ps):
+			// Nothing is wrong: this adapter simply has not been
+			// projected yet. A fresh install is entirely in this state,
+			// and calling it "problems" alarms a new user for no reason.
+			fmt.Fprintf(out, "%s: %s pending (run: loadout sync)\n",
+				a.Name(), countNoun(len(ps), "change", "changes"))
+		default:
+			fmt.Fprintf(out, "%s: %s (run: loadout doctor)\n",
+				a.Name(), countNoun(len(ps), "problem", "problems"))
 		}
 	}
 	if hasRemote {
