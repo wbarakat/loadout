@@ -37,8 +37,8 @@ loadoutd: generated an access token: <token>
 Save it now. Every later run only prints the address it listens on;
 the token itself never appears again.
 
-Front `loadoutd` with an HTTPS URL of your own — a reverse proxy, a
-tunnel, or a Tailscale/VPN address — before you connect a real
+Front `loadoutd` with an HTTPS URL of your own: a reverse proxy, a
+tunnel, or a Tailscale/VPN address, before you connect a real
 device. The token is a bearer credential; do not send it over plain
 HTTP on an untrusted network.
 
@@ -66,7 +66,7 @@ signed**. Any device holding the remote's bearer token can:
 
 An already-enrolled device merges a pushed snapshot without checking
 who really authored it. In self-host v1, **the holder of the bearer
-token is trusted as the vault's owner** — this includes the operator
+token is trusted as the vault's owner**, and this includes the operator
 of a self-hosted server. Treat the token with the same care as a root
 credential to the vault: anyone who has it can push content every
 device will merge.

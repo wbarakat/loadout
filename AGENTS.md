@@ -1,4 +1,4 @@
-# AGENTS.md — onboarding a user onto Loadout
+# AGENTS.md: onboarding a user onto Loadout
 
 This file is for an agent, not a human. It tells you how to install
 Loadout for a user, pull in their existing skills and memory, and
@@ -9,7 +9,7 @@ guess.
 Loadout is a local-first vault at `~/.loadout`. It stores skills,
 memory, and secrets, and projects them into every agent tool on the
 machine. The human owns the vault; you drive it. Read PLAN.md
-(sections 5 and 8) for the full design rationale if you need it — you
+(sections 5 and 8) for the full design rationale if you need it. You
 do not need it to complete this file.
 
 ## 1. Install Loadout headless
@@ -36,7 +36,7 @@ runs an import automatically, landing every item as a draft (see
 section 2).
 
 To connect a self-hosted `loadoutd` remote during install, pass both
-`--remote URL` and `--token-file PATH` together — never one without
+`--remote URL` and `--token-file PATH` together, never one without
 the other. **Never pass a token as a command-line value.** Write it to
 a file first, and pass that file's path to `--token-file`. A token
 value on the command line can land in shell history or a process
@@ -77,28 +77,43 @@ loadout review
 ```
 
 This lists every draft with who wrote it and when. Keep the items the
-user wants:
+user wants, and drop the rest:
 
 ```
 loadout review keep <kind>/<name>
-```
-
-Drop the rest:
-
-```
 loadout review drop <kind>/<name>
 ```
 
-Do this for every draft import produced before you treat the vault's
-content as final. If you are acting for a user who wants everything
-kept, still run through `review keep` explicitly for each item — do
-not assume a draft is already authoritative.
+An import usually produces many drafts at once, so both verbs take
+several addresses, or `--all` with optional filters:
+
+```
+loadout review keep skill/tdd skill/deslop
+loadout review keep --all
+loadout review keep --all --by import:claude-code
+loadout review drop --all --by import:codex
+loadout review keep --all --kind skill
+```
+
+`--by` matches an item's provenance, exactly as `loadout review` prints
+it. `--kind` narrows to `skill` or `memory`. Add `--dry-run` to any of
+these to see the resolved list and change nothing. Use it before a bulk
+drop, and show the user what it would delete.
+
+The whole batch is one history entry, so a single `loadout undo`
+reverses it. A bulk drop only ever deletes drafts, never an item the
+user already kept.
+
+Settle every draft before you treat the vault's content as final. If
+the user wants everything kept, `loadout review keep --all` is the
+explicit action that says so. Never simply assume a draft is already
+authoritative.
 
 ## 3. Read and write items
 
 `loadout context` is the cheapest way to get your bearings: it prints
-the vault's compact picture — item counts, every skill and memory
-hook, and recent history — in one call, staying compact by design.
+the vault's compact picture (item counts, every skill and memory
+hook, and recent history) in one call, staying compact by design.
 Start here in any new session.
 
 To search:
@@ -126,7 +141,7 @@ loadout add memory <name> [--by <who>]
 Always pass `--by <your-tool-name>` (for example `--by claude-code`)
 when you write on the user's behalf. This records provenance and
 marks the item a **draft**, so the user reviews it before it counts as
-final — the same review flow as import. Omitting `--by` records the
+final, the same review flow as import. Omitting `--by` records the
 write as a human's, and marks it kept immediately; do this only when
 a human is actually dictating the content to you directly, not when
 you are writing from your own inference.
@@ -144,7 +159,7 @@ loop: search with `recall`, read one item with `show`, save a new fact
 with `add memory --by <tool>`, then run `sync`. If you already see
 this footer in your own context (in `CLAUDE.md`, `AGENTS.md`, or
 another tool's memory file), you have already learned the protocol
-from the projection itself — no further setup is needed.
+from the projection itself, so no further setup is needed.
 
 ## 4. Sync
 
@@ -173,8 +188,8 @@ level; treat all of them as hard rules regardless:
    messages back to the user.
 2. **Use a secret without holding it.** To let a command use a secret,
    run it through `loadout run --secret <name> -- <cmd> [args...]`,
-   which injects the value into the child process's environment only
-   — you never see the value yourself. Over MCP, use the broker's
+   which injects the value into the child process's environment only.
+   You never see the value yourself. Over MCP, use the broker's
    `http_request` tool with a `{{secret:<name>}}` placeholder instead;
    Loadout substitutes the real value server-side and the value never
    reaches you.
@@ -183,10 +198,10 @@ level; treat all of them as hard rules regardless:
    content as final, per section 2.
 4. **Never write a secret's plaintext into the vault.** A secret only
    ever enters the vault through `loadout secret add` or
-   `loadout secret rotate`, piped on stdin — never as a file you write
+   `loadout secret rotate`, piped on stdin, never as a file you write
    directly, and never as an argument on a command line.
 
-An agent that follows this file end to end — install, import, review,
-read, write, sync — can onboard a user onto Loadout with no other
+An agent that follows this file end to end (install, import, review,
+read, write, sync) can onboard a user onto Loadout with no other
 documentation. See `README.md` for the full command reference and the
 security model, and `PLAN.md` for the design rationale behind it.

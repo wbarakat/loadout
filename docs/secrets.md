@@ -24,7 +24,7 @@ there is no safe way to read a value there without echoing it back.
 - `--rotate-after` is a reminder duration, for example `720h`.
 - `--allowed-hosts` lists the hosts the MCP broker may send this
   secret to (see [mcp.md](mcp.md)). Give a bare host or `host:port`
-  — no scheme, no path, no wildcard. Leave it unset, and the broker
+  (no scheme, no path, no wildcard). Leave it unset, and the broker
   refuses to send this secret anywhere at all: the default is fail
   closed, not open.
 - `--by` records who added it. Omit it for a human typing directly;
@@ -36,7 +36,7 @@ there is no safe way to read a value there without echoing it back.
 loadout secret list [--json]
 ```
 
-Prints every secret's metadata — name, service, who added it, and
+Prints every secret's metadata: name, service, who added it, and
 when. Never a value.
 
 ## Show a secret
@@ -81,11 +81,11 @@ loadout run --secret <name>[=ENVVAR] [--secret <name2>...] [--by <who>] -- <cmd>
 `run` decrypts every named secret, injects each into the child
 process's environment, then execs `<cmd>`. Loadout's own exit code is
 the child's exit code. By default the environment variable name is
-derived from the secret's name — `openai-key` becomes `OPENAI_KEY` —
+derived from the secret's name (`openai-key` becomes `OPENAI_KEY`),
 or give an explicit name with `<name>=ENVVAR`.
 
 The value never reaches Loadout's own stdout, stderr, or the access
-log — only the child process's environment. `run` has no `--json`
+log, only the child process's environment. `run` has no `--json`
 form: it is a transparent wrapper around the child, with nothing of
 its own to report.
 
@@ -95,7 +95,7 @@ Every real use of a secret appends one JSON line to `access.log`, at
 the root of the vault (`~/.loadout/access.log` by default, or
 `$LOADOUT_HOME/access.log`). Each line names the time, the verb
 (`show`, `rotate`, `run`, or `broker` for an MCP-brokered request),
-the secret's name, and who used it — never a value. A brokered
+the secret's name, and who used it, never a value. A brokered
 request also names the exact host the secret was sent to. This file
 is device-local: it never syncs, and it never enters the vault's own
 history.
@@ -107,11 +107,11 @@ nowhere else:
 
 1. As ciphertext at rest, in the vault's `secret/<name>` files.
 2. As an environment variable inside a child process `loadout run`
-   spawned — never in Loadout's own process output.
-3. On stdout, under an explicit `loadout secret show <name> --reveal`
-   — never by default, and never in JSON output.
+   spawned, never in Loadout's own process output.
+3. On stdout, under an explicit `loadout secret show <name> --reveal`.
+   It is never shown by default, and never in JSON output.
 4. Inside an outbound HTTP request the MCP broker's `http_request`
-   tool builds, substituted server-side — never returned to the
+   tool builds, substituted server-side, never returned to the
    agent that asked for it. See [mcp.md](mcp.md).
 
 It never appears in a plaintext vault file, a tool projection, an

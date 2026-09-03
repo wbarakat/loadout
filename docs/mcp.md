@@ -31,7 +31,7 @@ arguments, in a form close to this:
 ```
 
 Add this to your tool's own MCP configuration file. Some tools also
-offer a short command for the same thing — check your tool's own
+offer a short command for the same thing. Check your tool's own
 documentation for its exact syntax.
 
 ## The read tools
@@ -62,13 +62,13 @@ request, server-side, and returns only the response. The agent never
 reads the value.
 
 Arguments: `method`, `url`, `headers` (an object), `body` (a string).
-A placeholder is refused in `url` outright — before the URL is even
-parsed — so a secret can never choose or rewrite the host a request
+A placeholder is refused in `url` outright, before the URL is even
+parsed, so a secret can never choose or rewrite the host a request
 is sent to.
 
 Before decrypting anything, Loadout checks every referenced secret's
 `allowed_hosts` against the request's exact host, case-insensitively.
-An empty `allowed_hosts` refuses the whole request — no host is
+An empty `allowed_hosts` refuses the whole request: no host is
 permitted by default. A host that is not an exact match also refuses
 the whole request; a subdomain or a suffix match does not count. This
 check runs for every referenced secret before any of them is
@@ -76,7 +76,7 @@ decrypted, so one permitted secret can never carry another,
 unpermitted one along.
 
 A request with **no** `{{secret:<name>}}` placeholder uses no secret,
-so the allowlist does not apply — it is a plain fetch that can reach
+so the allowlist does not apply: it is a plain fetch that can reach
 any host. The `allowed_hosts` gate only governs requests that carry a
 secret. (The local stdio server runs as you, so a general fetch is no
 more powerful than a shell; the gate exists to stop a secret from
@@ -92,7 +92,7 @@ send the request. It also:
   value, replacing it with `[redacted-by-loadout]`, so a host that
   reflects a credential back (an echoed header, an error message
   quoting it) cannot hand it to the agent that never saw it;
-- appends one access-log entry per secret used, naming the host —
+- appends one access-log entry per secret used, naming the host,
   never the full URL, never the value. See
   [secrets.md](secrets.md#the-access-log).
 
@@ -104,4 +104,4 @@ loadout secret add openai-key --service openai --allowed-hosts api.openai.com
 
 See [secrets.md](secrets.md) for `secret add`/`rotate`, and
 [device-roles.md](device-roles.md) for which devices can decrypt a
-secret at all — the MCP broker only ever works on a **full** device.
+secret at all: the MCP broker only ever works on a **full** device.

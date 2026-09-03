@@ -10,7 +10,7 @@ own machines.
 Use a throwaway vault for this check, not your real one. Never use a
 real token, a real key, or a real secret value while you run it. The
 example names below (`smoke-check`, `stripe-key`, and so on) are
-placeholders — use whatever names you seed.
+placeholders. Use whatever names you seed.
 
 ## Before you start
 

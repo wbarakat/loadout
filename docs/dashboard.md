@@ -19,10 +19,10 @@ browser refuses every request.
 
 Open the dashboard in your browser. It asks for three fields:
 
-- **loadoutd URL** — for example `https://loadoutd.example`.
-- **Bearer token** — the access token `loadoutd` printed on its first
+- **loadoutd URL**: for example `https://loadoutd.example`.
+- **Bearer token**: the access token `loadoutd` printed on its first
   run.
-- **Device name** — defaults to `dashboard`.
+- **Device name**: defaults to `dashboard`.
 
 Then add a device key: click **Generate key** to create a new one in
 the browser, or paste an existing age identity. The dashboard shows
@@ -32,7 +32,7 @@ the new key's recipient (`age1...`) and the exact command to run:
 loadout devices approve dashboard --no-secrets
 ```
 
-Run that command on an already-approved **full** device — your
+Run that command on an already-approved **full** device, your
 laptop, say. `--no-secrets` is what keeps the browser out of every
 secret's recipient list; see [device-roles.md](device-roles.md) for
 what that guarantees.
@@ -54,7 +54,7 @@ device afterward to confirm the change and push it on.
 ## Secrets are metadata-only
 
 Select Secrets, then click a secret's name. The page shows only its
-metadata — service, hook, rotation reminder, allowed hosts, who added
+metadata: service, hook, rotation reminder, allowed hosts, who added
 it, and when. There is no value anywhere on the page, and no button
 or control to reveal one. A note on the page says so directly, and
 points at the CLI:
@@ -71,8 +71,19 @@ marks the item kept and drops it out of the queue. A skill or memory
 item also offers an **Edit** control, so you can fix a draft before
 you keep it. There is no drop control in the dashboard; drop an
 unwanted draft from the CLI instead, with `loadout review drop
-<kind>/<name>`. See [import.md](import.md) for the full review
-workflow.
+<kind>/<name>`.
+
+The dashboard reviews one item at a time, which suits editing a draft
+before keeping it. When you are not editing, and a first import has
+left dozens of drafts, the CLI settles them in one command:
+
+```
+loadout review keep --all --by import:claude-code
+loadout review drop --all --by import:codex --dry-run
+```
+
+See [import.md](import.md#reviewing-many-at-once) for the filters and
+the bulk workflow.
 
 ## Next steps
 

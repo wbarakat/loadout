@@ -8,10 +8,10 @@ that always uses the no-secrets role today.
 
 ## The two roles
 
-- **full** — reads every skill, every memory fact, and can decrypt
+- **full**: reads every skill, every memory fact, and can decrypt
   every secret. This is the default role for a device you approve
   with no flag.
-- **no-secrets** — reads every skill and every memory fact, the same
+- **no-secrets**: reads every skill and every memory fact, the same
   as a full device. A secret's value never encrypts to its key at
   all: it is not that the device is asked not to decrypt one, and not
   a client-side check that could be skipped. A secret simply has no
@@ -31,7 +31,7 @@ approve a device that must never read a secret. See
 (`approved`, `waiting`, or `re-keyed`).
 
 To trust an out-of-band-verified new key for an already-approved
-device — a re-key, or recovering a lost one — name the exact
+device (a re-key, or recovering a lost one), name the exact
 recipient you verified:
 
 ```
@@ -41,7 +41,7 @@ loadout devices approve <name> --rotate <recipient> [--no-secrets|--full]
 Omit `--no-secrets`/`--full` on a rotation to keep that device's
 existing role unchanged. A rotation never guesses the new key from
 the remote's own live roster; it only ever accepts a recipient you
-pass explicitly, verified out-of-band — for example by reading it
+pass explicitly, verified out-of-band, for example by reading it
 straight from `loadout device` on that machine.
 
 ## Changing a device's role
@@ -58,15 +58,15 @@ already holds **no-secrets**, drop the flag to promote it back to
 **full**. Either direction re-encrypts every secret to the roster as
 it now stands: a device just demoted to no-secrets drops out of every
 secret's recipients immediately, and one just promoted to full joins
-them. This happens as part of the same approval — there is no
+them. This happens as part of the same approval. There is no
 separate step to run.
 
 ## What the guarantee actually is
 
 A secret's value is encrypted to every **full** device in the
 roster, and to no one else. A no-secrets device receives the exact
-same vault snapshot as every other device — same skills, same
-memory, same secret *files* — but those secret files hold ciphertext
+same vault snapshot as every other device (same skills, same
+memory, same secret *files*), but those secret files hold ciphertext
 it has no key for. `loadout secret show`, `loadout run --secret`, and
 the MCP broker's `http_request` (see [mcp.md](mcp.md)) all fail to
 decrypt on a no-secrets device, the same way they would fail for
