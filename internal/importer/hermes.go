@@ -96,11 +96,17 @@ func hermesBundledManifest(skillsDir string) (names map[string]bool, present boo
 // package. Before that, it drops three kinds of entry outright,
 // never handing them to scanSkillEntry at all:
 //
-//   - ".bundled_manifest" itself — a file, not a skill folder.
-//   - ".archive" — the whole subtree of retired bundled skills
-//     (source map §4). It is never descended into.
+//   - any hidden entry (a name starting with "."): ".bundled_manifest"
+//     and ".archive" (the retired-bundled-skills subtree, never
+//     descended into), plus Hermes's own internals — .curator_state,
+//     .curator_backups, .hub, .usage.json and the like.
 //   - any entry whose name is a key in this directory's own
 //     .bundled_manifest — the bundled vendor library.
+//   - any CATEGORY grouping directory (isHermesCategoryDir): a directory
+//     with no SKILL.md of its own, only skill subfolders. Hermes's
+//     bundled library is organized this way, and the manifest names only
+//     part of it, so the whole grouping is excluded rather than
+//     descended into — see isHermesCategoryDir.
 //
 // A manifest that is PRESENT but names zero usable skills — malformed
 // or garbage content — fails CLOSED: this returns no skills at all
@@ -142,13 +148,87 @@ func scanHermesSkills(skillsDir, tool, vaultSkillsDir string) ([]CandidateSkill,
 		if strings.HasPrefix(name, ".") || bundled[name] {
 			continue
 		}
-		s, w := scanSkillEntry(filepath.Join(skillsDir, name), tool, vaultSkillsDir)
+		entryPath := filepath.Join(skillsDir, name)
+		// A Hermes CATEGORY grouping directory (creative/, devops/, …)
+		// holds only skill subfolders, no SKILL.md of its own. It is part
+		// of Hermes's bundled vendor library, which the manifest names
+		// only in part — so descending would import the uncovered rest as
+		// unwanted vendor drafts. Exclude the whole grouping silently, the
+		// same fail-closed rule the manifest exclusion already applies to
+		// the flat bundled set. A user's own skills sit at the top level,
+		// not inside a category grouping. Without this, every category
+		// directory also warned "no readable SKILL.md" — misleading noise,
+		// since the real skills are one level down.
+		if isHermesCategoryDir(entryPath) {
+			continue
+		}
+		s, w := scanSkillEntry(entryPath, tool, vaultSkillsDir)
 		warnings = append(warnings, w...)
 		if s != nil {
 			skills = append(skills, *s)
 		}
 	}
 	return skills, warnings
+}
+
+// isHermesCategoryDir reports whether entryPath is a Hermes "category"
+// grouping directory rather than a skill. Hermes organizes its bundled
+// skill library into categories — skills/creative/comfyui/SKILL.md — and
+// marks each category with a DESCRIPTION.md file. A directory is a
+// category when it has no SKILL.md of its own AND either:
+//
+//   - it carries a DESCRIPTION.md (Hermes's category marker) — this also
+//     catches an emptied category that holds only its DESCRIPTION.md
+//     after its skills were archived; or
+//   - it holds at least one immediate subdirectory that IS a skill (has
+//     a SKILL.md), the populated-category shape.
+//
+// Such a grouping is bundled vendor content, excluded whole, and the
+// manifest names only part of the nested set — so descending would flood
+// the vault with vendor drafts. A directory that is itself a skill (has
+// its own SKILL.md), or a bare folder with neither marker, is NOT a
+// category: the caller scans it as one entry, which may then warn if it
+// is malformed — a genuinely broken user skill folder still surfaces.
+//
+// It only ever stats SKILL.md / DESCRIPTION.md paths and lists directory
+// names — it never opens a config or credential file — so it keeps this
+// source's read-only, named-files-only secret-safety contract.
+func isHermesCategoryDir(entryPath string) bool {
+	real, err := filepath.EvalSymlinks(entryPath)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(real)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(real, "SKILL.md")); err == nil {
+		return false // itself a skill folder, not a grouping
+	}
+	if _, err := os.Stat(filepath.Join(real, "DESCRIPTION.md")); err == nil {
+		return true // Hermes's own category marker
+	}
+	entries, err := os.ReadDir(real)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		childReal, err := filepath.EvalSymlinks(filepath.Join(real, e.Name()))
+		if err != nil {
+			continue
+		}
+		ci, err := os.Stat(childReal)
+		if err != nil || !ci.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(childReal, "SKILL.md")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // hermesProfileNames lists the profile names under root's own

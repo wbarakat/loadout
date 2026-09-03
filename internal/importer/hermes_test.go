@@ -145,6 +145,71 @@ func TestHermesSkillsExcludesArchiveSkill(t *testing.T) {
 	}
 }
 
+// TestHermesSkillsExcludesCategoryGroupingDir proves a Hermes category
+// grouping directory — one with no SKILL.md of its own, only skill
+// subfolders (skills/creative/comfyui/SKILL.md) — is excluded whole and
+// silently, never scanned as a skill and never warned about, while a
+// real top-level user skill beside it still imports. The bundled
+// library is organized this way and the manifest names only part of it,
+// so descending would flood the vault with vendor drafts.
+func TestHermesSkillsExcludesCategoryGroupingDir(t *testing.T) {
+	home := t.TempDir()
+	skillsDir := filepath.Join(home, ".hermes", "skills")
+
+	writeHermesSkill(t, filepath.Join(skillsDir, "mine"), "mine", "a real user skill")
+	// A populated category grouping: no SKILL.md at creative/, a real
+	// skill one level down at creative/comfyui/. comfyui is NOT in any
+	// manifest, so descending would import it as an unwanted draft.
+	writeHermesSkill(t, filepath.Join(skillsDir, "creative", "comfyui"), "comfyui", "a bundled vendor skill")
+	if err := os.WriteFile(filepath.Join(skillsDir, "creative", "DESCRIPTION.md"), []byte("the creative category\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// An emptied category shell: only a DESCRIPTION.md, its skills long
+	// archived. It must not warn "no readable SKILL.md" either.
+	if err := os.MkdirAll(filepath.Join(skillsDir, "gifs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, "gifs", "DESCRIPTION.md"), []byte("the gifs category\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, warnings, err := (importer.Hermes{}).Skills(importer.ImportCtx{Home: home, VaultSkillsDir: filepath.Join(t.TempDir(), "v")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range skills {
+		if s.Name == "comfyui" {
+			t.Fatalf("a nested bundled category skill must not import, got %+v", skills)
+		}
+	}
+	var sawMine bool
+	for _, s := range skills {
+		if s.Name == "mine" {
+			sawMine = true
+		}
+	}
+	if !sawMine {
+		t.Fatalf("a real top-level user skill must still import, got %+v", skills)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w.Path, "creative") || strings.Contains(w.Path, "gifs") {
+			t.Fatalf("a category grouping dir must be excluded silently, got warning %+v", w)
+		}
+	}
+}
+
+// writeHermesSkill writes a minimal SKILL.md skill folder at dir.
+func writeHermesSkill(t *testing.T, dir, name, description string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: " + name + "\ndescription: " + description + "\n---\n\nDo the " + name + " thing.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestHermesSkillsExcludesVaultOwnedSkill is the direct unit check
 // for the symlink setupHermesHome injects: a skill symlinked into the
 // vault's own skills dir must never import.
