@@ -38,26 +38,12 @@ export default function Landing(): JSX.Element {
       <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-6 py-8 sm:px-8">
         <nav className="flex items-baseline justify-between gap-6 font-mono text-sm">
           <span className="font-medium">loadout</span>
-          <div className="flex items-center gap-5">
-            <a
-              className="underline decoration-1 underline-offset-4 opacity-60 outline-none hover:opacity-100 focus-visible:ring-2 focus-visible:ring-[#0033FF] dark:focus-visible:ring-[#8AA0FF]"
-              href={`${REPO}#readme`}
-            >
-              docs
-            </a>
-            <a
-              className="underline decoration-1 underline-offset-4 opacity-60 outline-none hover:opacity-100 focus-visible:ring-2 focus-visible:ring-[#0033FF] dark:focus-visible:ring-[#8AA0FF]"
-              href={REPO}
-            >
-              github
-            </a>
-            <a
-              className="underline decoration-1 underline-offset-4 opacity-60 outline-none hover:opacity-100 focus-visible:ring-2 focus-visible:ring-[#0033FF] dark:focus-visible:ring-[#8AA0FF]"
-              href="/app"
-            >
-              dashboard
-            </a>
-          </div>
+          <a
+            className="underline decoration-1 underline-offset-4 opacity-60 outline-none hover:opacity-100 focus-visible:ring-2 focus-visible:ring-[#0033FF] dark:focus-visible:ring-[#8AA0FF]"
+            href={REPO}
+          >
+            github
+          </a>
         </nav>
 
         <div className="flex flex-1 flex-col justify-center py-16 sm:py-24">
